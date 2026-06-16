@@ -23,3 +23,21 @@ func HitGetEndpoint(targetURL string) (int, error) {
 
 	return resp.StatusCode, nil
 }
+
+func HitPostEndpoint(targetURL string) (int, error) {
+
+	resp, err := http.Post(targetURL)
+
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	_, err = io.Copy(io.Discard, resp.Body)
+
+	if err != nil {
+		return resp.StatusCode, err
+	}
+
+	return resp.StatusCode, nil
+}
