@@ -10,7 +10,7 @@ func HitGetEndpoint(targetURL string) (int, error) {
 	resp, err := http.Get(targetURL)
 
 	if err != nil {
-		return resp.StatusCode, err
+		return 0, err
 	}
 
 	defer resp.Body.Close()
