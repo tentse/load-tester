@@ -42,11 +42,7 @@ func checkRequest(t *testing.T, tc hitCase) http.HandlerFunc {
 
 func TestHitSendsRequest(t *testing.T) {
 
-	// [nit] Conventional Go name for a table is `tests` (or `cases`), not `testConfig`.
-	// Heads-up for what's next: PUT/PATCH/DELETE need NO new test code -- method is data now,
-	// so each new verb is just another row here. Keep status codes minimal (one or two prove
-	// pass-through); spend new rows on method x token x body combinations instead.
-	// Missing combination: a body-method (POST/PUT/PATCH) with NO token AND NO body.
+	// [nit] `caseConfig` -> the conventional Go name for a test table is `tests` or `cases`.
 	caseConfig := []hitCase{
 		{
 			name:       "Hitting GET with valid token",
@@ -88,6 +84,11 @@ func TestHitSendsRequest(t *testing.T) {
 			reqBody:    `{"body":"hi"}`,
 			mockStatus: http.StatusCreated,
 		},
+		// [should-fix] Good -- this is the no-token + no-body combination the earlier review
+		// flagged as missing. But the name is copy-pasted from the row above: this case has
+		// reqBody: "", so it's "POST WITHOUT body". t.Run uses name as the subtest id, so two
+		// identical names collide -- Go appends "#01" and the output mislabels which case ran.
+		// Rename to "POST without token without body".
 		{
 			name:       "POST without token with body",
 			httpMethod: http.MethodPost,
@@ -104,7 +105,8 @@ func TestHitSendsRequest(t *testing.T) {
 			mockServer := httptest.NewServer(checkRequest(t, tc))
 			defer mockServer.Close()
 
-			got, err := hit(t.Context(), tc.httpMethod, mockServer.URL, tc.token, tc.reqBody)
+			r := newRunner()
+			got, err := r.hit(t.Context(), tc.httpMethod, mockServer.URL, tc.token, tc.reqBody)
 
 			if err != nil {
 				t.Fatalf("hit() error = %v, want nil", err)
@@ -123,7 +125,8 @@ func TestHitTransportError(t *testing.T) {
 	url := mockServer.URL
 	mockServer.Close()
 
-	_, err := hit(t.Context(), http.MethodGet, url, "", "")
+	r := newRunner()
+	_, err := r.hit(t.Context(), http.MethodGet, url, "", "")
 	if err == nil {
 		t.Error("hitting a closed server: want error, got nil")
 	}
@@ -134,7 +137,8 @@ func TestHitURLError(t *testing.T) {
 	// Otherwise it reads as magic.
 	url := "%"
 
-	_, err := hit(t.Context(), http.MethodGet, url, "", "")
+	r := newRunner()
+	_, err := r.hit(t.Context(), http.MethodGet, url, "", "")
 
 	if err == nil {
 		t.Error("providing false URL: want error, got nil")
