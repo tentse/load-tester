@@ -7,236 +7,144 @@ import (
 	"testing"
 )
 
-func TestGetEndpoint(t *testing.T) {
+type hitCase struct {
+	name       string
+	httpMethod string
+	token      string
+	wantAuth   string
+	reqBody    string
+	mockStatus int
+}
 
-	getEndpointTestCases := []struct {
-		name           string
-		token          string
-		wantAuth       string
-		mockStatus     int
-		expectedStatus int
-	}{
+func checkRequest(t *testing.T, tc hitCase) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != tc.httpMethod {
+			t.Errorf("method = %q, want %q", r.Method, tc.httpMethod)
+		}
+		if got := r.Header.Get("Authorization"); got != tc.wantAuth {
+			t.Errorf("authorization = %q, want %q", got, tc.wantAuth)
+		}
+
+		if tc.reqBody != "" {
+			body, _ := io.ReadAll(r.Body)
+			if string(body) != tc.reqBody {
+				t.Errorf("body = %q, want %q", body, tc.reqBody)
+			}
+			if got := r.Header.Get("Content-Type"); got != "application/json" {
+				t.Errorf("content-Type = %q, want application/json", got)
+			}
+		} else if got := r.Header.Get("Content-Type"); got != "" {
+			t.Errorf("reqBody empty but content type present = %q", got)
+		}
+		w.WriteHeader(tc.mockStatus)
+	}
+}
+
+func TestHitSendsRequest(t *testing.T) {
+
+	// [nit] Conventional Go name for a table is `tests` (or `cases`), not `testConfig`.
+	// Heads-up for what's next: PUT/PATCH/DELETE need NO new test code -- method is data now,
+	// so each new verb is just another row here. Keep status codes minimal (one or two prove
+	// pass-through); spend new rows on method x token x body combinations instead.
+	// Missing combination: a body-method (POST/PUT/PATCH) with NO token AND NO body.
+	caseConfig := []hitCase{
 		{
-			name:           "Hitting healthy GET endpoint",
-			mockStatus:     http.StatusOK,
-			token:          "",
-			wantAuth:       "",
-			expectedStatus: 200,
+			name:       "Hitting GET with valid token",
+			httpMethod: http.MethodGet,
+			token:      "token",
+			wantAuth:   "Bearer token",
+			reqBody:    "",
+			mockStatus: http.StatusOK,
 		},
 		{
-			name:           "Hitting GET with valid token",
-			mockStatus:     http.StatusOK,
-			token:          "token",
-			wantAuth:       "Bearer token",
-			expectedStatus: 200,
+			name:       "GET, server returns 500",
+			httpMethod: http.MethodGet,
+			token:      "",
+			wantAuth:   "",
+			reqBody:    "",
+			mockStatus: http.StatusInternalServerError,
 		},
 		{
-			name:           "Handling 403 forbidden",
-			mockStatus:     http.StatusForbidden,
-			token:          "user-token",
-			wantAuth:       "Bearer user-token",
-			expectedStatus: 403,
+			name:       "POST with token and body",
+			httpMethod: http.MethodPost,
+			token:      "token",
+			wantAuth:   "Bearer token",
+			reqBody:    `{"body":"hi"}`,
+			mockStatus: http.StatusCreated,
 		},
 		{
-			name:           "Handling 500 Internal Error",
-			mockStatus:     http.StatusInternalServerError,
-			token:          "",
-			wantAuth:       "",
-			expectedStatus: 500,
+			name:       "POST with token without body",
+			httpMethod: http.MethodPost,
+			token:      "token",
+			wantAuth:   "Bearer token",
+			reqBody:    "",
+			mockStatus: http.StatusCreated,
+		},
+		{
+			name:       "POST without token with body",
+			httpMethod: http.MethodPost,
+			token:      "",
+			wantAuth:   "",
+			reqBody:    `{"body":"hi"}`,
+			mockStatus: http.StatusCreated,
+		},
+		{
+			name:       "POST without token with body",
+			httpMethod: http.MethodPost,
+			token:      "",
+			wantAuth:   "",
+			reqBody:    "",
+			mockStatus: http.StatusCreated,
 		},
 	}
 
-	for _, tc := range getEndpointTestCases {
+	for _, tc := range caseConfig {
 		t.Run(tc.name, func(t *testing.T) {
-			mockGetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodGet {
-					w.WriteHeader(http.StatusMethodNotAllowed)
-					return
-				} else if got := r.Header.Get("Authorization"); got != tc.wantAuth {
-					t.Errorf("Authorization = %q, want %q", got, tc.wantAuth)
-				}
-				w.WriteHeader(tc.mockStatus)
-			}))
-			defer mockGetServer.Close()
 
-			statusCode, err := HitGetEndpoint(mockGetServer.URL, tc.token)
+			mockServer := httptest.NewServer(checkRequest(t, tc))
+			defer mockServer.Close()
+
+			got, err := hit(t.Context(), tc.httpMethod, mockServer.URL, tc.token, tc.reqBody)
 
 			if err != nil {
-				t.Fatalf("expected no error, but got: %v", err)
-			} else if statusCode != tc.expectedStatus {
-				t.Errorf("got %v status code, want %v status code", statusCode, tc.expectedStatus)
+				t.Fatalf("hit() error = %v, want nil", err)
+			}
+			if got != tc.mockStatus {
+				t.Errorf("status = %d, want %d", got, tc.mockStatus)
 			}
 		})
 	}
 
 }
 
-func TestPostEndpoint(t *testing.T) {
+func TestHitTransportError(t *testing.T) {
 
-	mockPostTestCases := []struct {
-		name           string
-		token          string
-		wantAuth       string
-		reqBody        string
-		mockStatus     int
-		expectedStatus int
-	}{
-		{
-			name:           "Handling 201 Created",
-			mockStatus:     http.StatusCreated,
-			token:          "",
-			wantAuth:       "",
-			reqBody:        `{body: "body"}`,
-			expectedStatus: 201,
-		},
-		{
-			name:           "Handling 400 Unprocessable Content",
-			mockStatus:     http.StatusBadRequest,
-			token:          "token",
-			wantAuth:       "Bearer token",
-			reqBody:        `{body: 44`,
-			expectedStatus: 400,
-		},
-		{
-			name:           "Handling 204 No Content",
-			mockStatus:     http.StatusNoContent,
-			token:          "",
-			wantAuth:       "",
-			reqBody:        `{body: "body"}`,
-			expectedStatus: 204,
-		},
-		{
-			name:           "Handling 400 Bad Request",
-			mockStatus:     http.StatusBadRequest,
-			token:          "",
-			wantAuth:       "",
-			reqBody:        `{body: "body"}`,
-			expectedStatus: 400,
-		},
-		{
-			name:           "Handling 401 Unauthorized",
-			mockStatus:     http.StatusUnauthorized,
-			token:          "",
-			wantAuth:       "",
-			reqBody:        `{body: "body"}`,
-			expectedStatus: 401,
-		},
-		{
-			name:           "Handling 403 Forbidden",
-			mockStatus:     http.StatusForbidden,
-			token:          "token",
-			wantAuth:       "Bearer token",
-			reqBody:        `{body: "body"}`,
-			expectedStatus: 403,
-		},
-		{
-			name:           "Handling 404 Not Found",
-			mockStatus:     http.StatusNotFound,
-			token:          "token",
-			wantAuth:       "Bearer token",
-			reqBody:        `{body: "body"}`,
-			expectedStatus: 404,
-		},
-		{
-			name:           "Handling 405 Method Not Allowed",
-			mockStatus:     http.StatusMethodNotAllowed,
-			token:          "token",
-			wantAuth:       "Bearer token",
-			reqBody:        `{body: "body"}`,
-			expectedStatus: 405,
-		},
-		{
-			name:           "Handling 409 Conflict",
-			mockStatus:     http.StatusConflict,
-			token:          "",
-			wantAuth:       "",
-			reqBody:        `{body: "body"}`,
-			expectedStatus: 409,
-		},
-		{
-			name:           "Handling 413 Content Too Large",
-			mockStatus:     http.StatusRequestEntityTooLarge,
-			token:          "",
-			wantAuth:       "",
-			reqBody:        `{body: "body"}`,
-			expectedStatus: 413,
-		},
-		{
-			name:           "Handling 415 Unsupported Media Type",
-			mockStatus:     http.StatusUnsupportedMediaType,
-			token:          "",
-			wantAuth:       "",
-			reqBody:        `{media: "unsuported media"}`,
-			expectedStatus: 415,
-		},
-		{
-			name:           "Handling 422 Unprocessable Content",
-			mockStatus:     http.StatusUnprocessableEntity,
-			token:          "token",
-			wantAuth:       "Bearer token",
-			reqBody:        `{body: 44}`,
-			expectedStatus: 422,
-		},
-		{
-			name:           "Handling 429 Too Many Requests",
-			mockStatus:     http.StatusTooManyRequests,
-			token:          "",
-			wantAuth:       "",
-			reqBody:        `{body: "body"}`,
-			expectedStatus: 429,
-		},
-		{
-			name:           "Handling 500 internal server error",
-			mockStatus:     http.StatusInternalServerError,
-			token:          "",
-			wantAuth:       "",
-			reqBody:        `{body: "body"}`,
-			expectedStatus: 500,
-		},
-		{
-			name:           "Handling 503 Service Unavalable",
-			mockStatus:     http.StatusServiceUnavailable,
-			token:          "",
-			wantAuth:       "",
-			reqBody:        `{body: "body"}`,
-			expectedStatus: 503,
-		},
-		{
-			name:           "Handling 504 Gateway Timeout",
-			mockStatus:     http.StatusGatewayTimeout,
-			token:          "",
-			wantAuth:       "",
-			reqBody:        `{body: "body"}`,
-			expectedStatus: 504,
-		},
+	mockServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := mockServer.URL
+	mockServer.Close()
+
+	_, err := hit(t.Context(), http.MethodGet, url, "", "")
+	if err == nil {
+		t.Error("hitting a closed server: want error, got nil")
 	}
-
-	for _, tc := range mockPostTestCases {
-		t.Run(tc.name, func(t *testing.T) {
-			mockPostServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodPost {
-					w.WriteHeader(http.StatusMethodNotAllowed)
-					return
-				} else if got := r.Header.Get("Authorization"); got != tc.wantAuth {
-					t.Errorf("Authorization = %q want %q", got, tc.wantAuth)
-				} else if tc.reqBody != "" {
-					body, _ := io.ReadAll(r.Body)
-					if string(body) != tc.reqBody {
-						t.Errorf("body = %q, want %q", body, tc.reqBody)
-					}
-				}
-				w.WriteHeader(tc.mockStatus)
-			}))
-			defer mockPostServer.Close()
-
-			statusCode, err := HitPostEndpoint(mockPostServer.URL, tc.token, tc.reqBody)
-
-			if err != nil {
-				t.Fatalf("expected no error, but got: %v", err)
-			} else if statusCode != tc.expectedStatus {
-				t.Errorf("got %v status code, want %v status code", statusCode, tc.expectedStatus)
-			}
-		})
-	}
-
 }
+
+func TestHitURLError(t *testing.T) {
+	// Passing "%" as url so that url.Parse (inside http.NewRequestWithContext) rejects it.
+	// Otherwise it reads as magic.
+	url := "%"
+
+	_, err := hit(t.Context(), http.MethodGet, url, "", "")
+
+	if err == nil {
+		t.Error("providing false URL: want error, got nil")
+	}
+}
+
+// [should-fix] Coverage gap, important for this project: nothing tests that ctx cancellation
+// actually reaches an in-flight request. For a load tester that's the headline feature --
+// Ctrl+C / a timeout MUST abort live requests. Future test: a slow handler + a context you
+// cancel mid-flight, then assert hit() returns quickly with errors.Is(err, context.Canceled).
+//
+// Reminder: run `go test -race ./...`. Once Run() drives many goroutines through the shared
+// http.Client, the race detector is the only thing that'll catch unsynchronized access.
