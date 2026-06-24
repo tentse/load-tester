@@ -42,10 +42,9 @@ func checkRequest(t *testing.T, tc hitCase) http.HandlerFunc {
 
 func TestHitSendsRequest(t *testing.T) {
 
-	// [nit] `caseConfig` -> the conventional Go name for a test table is `tests` or `cases`.
-	caseConfig := []hitCase{
+	tests := []hitCase{
 		{
-			name:       "Hitting GET with valid token",
+			name:       "GET with token",
 			httpMethod: http.MethodGet,
 			token:      "token",
 			wantAuth:   "Bearer token",
@@ -53,7 +52,7 @@ func TestHitSendsRequest(t *testing.T) {
 			mockStatus: http.StatusOK,
 		},
 		{
-			name:       "GET, server returns 500",
+			name:       "GET, 500 passed through status",
 			httpMethod: http.MethodGet,
 			token:      "",
 			wantAuth:   "",
@@ -69,7 +68,7 @@ func TestHitSendsRequest(t *testing.T) {
 			mockStatus: http.StatusCreated,
 		},
 		{
-			name:       "POST with token without body",
+			name:       "POST with token, no body",
 			httpMethod: http.MethodPost,
 			token:      "token",
 			wantAuth:   "Bearer token",
@@ -77,20 +76,15 @@ func TestHitSendsRequest(t *testing.T) {
 			mockStatus: http.StatusCreated,
 		},
 		{
-			name:       "POST without token with body",
+			name:       "POST no token, with body",
 			httpMethod: http.MethodPost,
 			token:      "",
 			wantAuth:   "",
 			reqBody:    `{"body":"hi"}`,
 			mockStatus: http.StatusCreated,
 		},
-		// [should-fix] Good -- this is the no-token + no-body combination the earlier review
-		// flagged as missing. But the name is copy-pasted from the row above: this case has
-		// reqBody: "", so it's "POST WITHOUT body". t.Run uses name as the subtest id, so two
-		// identical names collide -- Go appends "#01" and the output mislabels which case ran.
-		// Rename to "POST without token without body".
 		{
-			name:       "POST without token with body",
+			name:       "POST no token, no body",
 			httpMethod: http.MethodPost,
 			token:      "",
 			wantAuth:   "",
@@ -99,7 +93,7 @@ func TestHitSendsRequest(t *testing.T) {
 		},
 	}
 
-	for _, tc := range caseConfig {
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 
 			mockServer := httptest.NewServer(checkRequest(t, tc))
