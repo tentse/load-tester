@@ -1,0 +1,71 @@
+package loadtest
+
+import (
+	"testing"
+	"time"
+)
+
+func TestPercentile(t *testing.T) {
+
+	tests := []struct {
+		name            string
+		sortedDurations []time.Duration
+		p               float64
+		want            time.Duration
+	}{
+		{
+			name:            "p50 returns the median",
+			sortedDurations: []time.Duration{10, 20, 30, 40, 50},
+			p:               0.5,
+			want:            time.Duration(30),
+		},
+		{
+			name:            "single element returns itself",
+			sortedDurations: []time.Duration{42},
+			p:               0.34,
+			want:            time.Duration(42),
+		},
+		{
+			name:            "p90 of 11 values",
+			sortedDurations: []time.Duration{10, 12, 24, 26, 35, 45, 56, 57, 58, 68, 89},
+			p:               0.9,
+			want:            time.Duration(68),
+		},
+		{
+			name:            "p99 of small sample is the max",
+			sortedDurations: []time.Duration{10, 12, 24, 26, 35, 45, 56, 57, 58, 68, 89, 200},
+			p:               0.99,
+			want:            time.Duration(200),
+		},
+		{
+			name:            "p<0 clamps to first",
+			sortedDurations: []time.Duration{10, 20, 30, 40, 50},
+			p:               -0.1,
+			want:            time.Duration(10),
+		},
+		{
+			name:            "p>1 clamps to last",
+			sortedDurations: []time.Duration{10, 20, 30, 40, 50},
+			p:               1.5,
+			want:            time.Duration(50),
+		},
+		{
+			// [nit] Style drift from the other rows: capital "E" and plural "slices". The rest
+			// are lowercase singular. Match them -> "empty slice returns 0".
+			name:            "Empty slices returns 0",
+			sortedDurations: []time.Duration{},
+			p:               0.2,
+			want:            time.Duration(0),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := percentile(tc.sortedDurations, tc.p)
+
+			if got != tc.want {
+				t.Errorf("percentile(%v, %v) = %v, want %v", tc.sortedDurations, tc.p, got, tc.want)
+			}
+		})
+	}
+}
