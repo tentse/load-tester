@@ -1,7 +1,9 @@
 package loadtest
 
 import (
+	"net/http"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -17,8 +19,8 @@ type result struct {
 	err     error
 }
 
+// Summary reports the aggregate outcome of a load test.
 type Summary struct {
-	// Summary reports the aggregate outcome of a load test.
 	Total      int
 	Succeeded  int
 	Failed     int
@@ -42,6 +44,9 @@ func summarize(results []result, elapsed time.Duration) Summary {
 		if res.err != nil {
 			summary.Errors[res.err.Error()]++
 			summary.Failed++
+		} else if res.status >= 500 {
+			summary.Errors[statusErrText(res.status)]++
+			summary.Failed++
 		} else {
 			durations = append(durations, res.latency)
 			summary.Succeeded++
@@ -64,4 +69,8 @@ func throughput(succeeded int, elapsed time.Duration) float64 {
 		return 0
 	}
 	return float64(succeeded) / elapsed.Seconds()
+}
+
+func statusErrText(statusCode int) string {
+	return strings.ToLower(http.StatusText(statusCode))
 }
