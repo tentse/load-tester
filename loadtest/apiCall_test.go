@@ -1,10 +1,13 @@
 package loadtest
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 type hitCase struct {
@@ -136,6 +139,46 @@ func TestHitURLError(t *testing.T) {
 
 	if err == nil {
 		t.Error("providing false URL: want error, got nil")
+	}
+}
+
+func TestRequestTimeOut(t *testing.T) {
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		select {
+		case <-time.After(2 * time.Second):
+		case <-req.Context().Done():
+		}
+	}))
+	defer mockServer.Close()
+
+	r := newRunner()
+	_, err := r.hit(t.Context(), http.MethodGet, mockServer.URL, "", "")
+
+	if err == nil {
+		t.Error("expected timeout error, overwaited for the server response")
+	}
+}
+
+func TestContextCancellation(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		select {
+		case <-time.After(2 * time.Second):
+		case <-req.Context().Done():
+		}
+	}))
+	defer mockServer.Close()
+
+	r := newRunner()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+
+	_, err := r.hit(ctx, http.MethodGet, mockServer.URL, "", "")
+	if err == nil {
+		t.Fatal("expected context timeout error, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected context deadline exceeded, got %v", err)
 	}
 }
 

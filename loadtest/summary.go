@@ -1,6 +1,7 @@
 package loadtest
 
 import (
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -44,7 +45,7 @@ func summarize(results []result, elapsed time.Duration) Summary {
 		if res.err != nil {
 			summary.Errors[res.err.Error()]++
 			summary.Failed++
-		} else if res.status >= 500 {
+		} else if isServerError(res.status) {
 			summary.Errors[statusErrText(res.status)]++
 			summary.Failed++
 		} else {
@@ -72,5 +73,14 @@ func throughput(succeeded int, elapsed time.Duration) float64 {
 }
 
 func statusErrText(statusCode int) string {
-	return strings.ToLower(http.StatusText(statusCode))
+
+	text := http.StatusText(statusCode)
+	if text == "" {
+		return fmt.Sprintf("HTTP %d", statusCode)
+	}
+	return strings.ToLower(text)
+}
+
+func isServerError(status int) bool {
+	return status >= 500
 }
