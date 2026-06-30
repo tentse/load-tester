@@ -43,6 +43,7 @@ Here are the commands I actually lean on while working, and what each one is for
 |---|---|
 | `go test ./...` | Run every test in the project. |
 | `go test ./loadtest/...` | Just the load-tester package, when I don't care about the rest. |
+| `go test -v -run TestSummary ./loadtest/` | Run a single test while iterating on it. `-run` takes a regex matched against test names; add `/SubtestName` (e.g. `-run TestPercentile/p90`) to drill into one table case. |
 | `go test -race ./...` | Run the tests with the race detector on. This is the one that matters — concurrency bugs stay hidden until something goes looking for them, and this is how you look. |
 | `go test -cover ./...` | Print a coverage percentage per package. |
 | `go test -coverprofile=cover.out ./... && go tool cover -html=cover.out` | Write a coverage profile and open it in the browser, so I can see exactly which lines aren't being hit. |

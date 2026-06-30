@@ -50,9 +50,7 @@ func TestPercentile(t *testing.T) {
 			want:            time.Duration(50),
 		},
 		{
-			// [nit] Style drift from the other rows: capital "E" and plural "slices". The rest
-			// are lowercase singular. Match them -> "empty slice returns 0".
-			name:            "Empty slices returns 0",
+			name:            "empty slices returns 0",
 			sortedDurations: []time.Duration{},
 			p:               0.2,
 			want:            time.Duration(0),
