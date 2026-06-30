@@ -12,6 +12,7 @@ import (
 
 type hitCase struct {
 	name       string
+	timeout    time.Duration
 	httpMethod string
 	token      string
 	wantAuth   string
@@ -49,6 +50,7 @@ func TestHitSendsRequest(t *testing.T) {
 		{
 			name:       "GET with token",
 			httpMethod: http.MethodGet,
+			timeout:    defaultTimeout,
 			token:      "token",
 			wantAuth:   "Bearer token",
 			reqBody:    "",
@@ -57,6 +59,7 @@ func TestHitSendsRequest(t *testing.T) {
 		{
 			name:       "GET, 500 passed through status",
 			httpMethod: http.MethodGet,
+			timeout:    defaultTimeout,
 			token:      "",
 			wantAuth:   "",
 			reqBody:    "",
@@ -65,6 +68,7 @@ func TestHitSendsRequest(t *testing.T) {
 		{
 			name:       "POST with token and body",
 			httpMethod: http.MethodPost,
+			timeout:    defaultTimeout,
 			token:      "token",
 			wantAuth:   "Bearer token",
 			reqBody:    `{"body":"hi"}`,
@@ -73,6 +77,7 @@ func TestHitSendsRequest(t *testing.T) {
 		{
 			name:       "POST with token, no body",
 			httpMethod: http.MethodPost,
+			timeout:    defaultTimeout,
 			token:      "token",
 			wantAuth:   "Bearer token",
 			reqBody:    "",
@@ -81,6 +86,7 @@ func TestHitSendsRequest(t *testing.T) {
 		{
 			name:       "POST no token, with body",
 			httpMethod: http.MethodPost,
+			timeout:    defaultTimeout,
 			token:      "",
 			wantAuth:   "",
 			reqBody:    `{"body":"hi"}`,
@@ -89,6 +95,7 @@ func TestHitSendsRequest(t *testing.T) {
 		{
 			name:       "POST no token, no body",
 			httpMethod: http.MethodPost,
+			timeout:    defaultTimeout,
 			token:      "",
 			wantAuth:   "",
 			reqBody:    "",
@@ -102,7 +109,7 @@ func TestHitSendsRequest(t *testing.T) {
 			mockServer := httptest.NewServer(checkRequest(t, tc))
 			defer mockServer.Close()
 
-			r := newRunner()
+			r := newRunner(tc.timeout)
 			got, err := r.hit(t.Context(), tc.httpMethod, mockServer.URL, tc.token, tc.reqBody)
 
 			if err != nil {
@@ -122,7 +129,7 @@ func TestHitTransportError(t *testing.T) {
 	url := mockServer.URL
 	mockServer.Close()
 
-	r := newRunner()
+	r := newRunner(defaultTimeout)
 	_, err := r.hit(t.Context(), http.MethodGet, url, "", "")
 	if err == nil {
 		t.Error("hitting a closed server: want error, got nil")
@@ -134,7 +141,7 @@ func TestHitURLError(t *testing.T) {
 	// Otherwise it reads as magic.
 	url := "%"
 
-	r := newRunner()
+	r := newRunner(defaultTimeout)
 	_, err := r.hit(t.Context(), http.MethodGet, url, "", "")
 
 	if err == nil {
@@ -146,38 +153,47 @@ func TestRequestTimeOut(t *testing.T) {
 
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		select {
-		case <-time.After(2 * time.Second):
+		case <-time.After(90 * time.Millisecond):
 		case <-req.Context().Done():
 		}
 	}))
 	defer mockServer.Close()
 
-	r := newRunner()
+	timeout := 10 * time.Millisecond
+	r := newRunner(timeout)
 	_, err := r.hit(t.Context(), http.MethodGet, mockServer.URL, "", "")
 
 	if err == nil {
 		t.Error("expected timeout error, overwaited for the server response")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected context deadline exceeded, got %v", err)
 	}
 }
 
 func TestContextCancellation(t *testing.T) {
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		select {
-		case <-time.After(2 * time.Second):
+		case <-time.After(90 * time.Millisecond):
 		case <-req.Context().Done():
 		}
 	}))
 	defer mockServer.Close()
 
-	r := newRunner()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	r := newRunner(defaultTimeout)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
 
 	_, err := r.hit(ctx, http.MethodGet, mockServer.URL, "", "")
 	if err == nil {
 		t.Fatal("expected context timeout error, got nil")
 	}
-	if !errors.Is(err, context.DeadlineExceeded) {
+	if !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context deadline exceeded, got %v", err)
 	}
 }
