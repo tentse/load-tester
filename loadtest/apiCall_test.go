@@ -33,9 +33,7 @@ func checkRequest(t *testing.T, tc hitCase) http.HandlerFunc {
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
 				t.Errorf("error occurred when reading body content. err -> %v", err)
-				// [should-fix] Return after reporting this read failure. Continuing compares a
-				// partial/invalid body and can produce misleading secondary failures that hide
-				// the operation that actually broke.
+				return
 			}
 			if string(body) != tc.reqBody {
 				t.Errorf("body = %q, want %q", body, tc.reqBody)
@@ -129,8 +127,7 @@ func TestHitSendsRequest(t *testing.T) {
 
 }
 
-func TestHitTransportError(t *testing.T) {
-
+func TestServerNotReachableError(t *testing.T) {
 	mockServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	url := mockServer.URL
 	mockServer.Close()
@@ -155,54 +152,63 @@ func TestHitURLError(t *testing.T) {
 	}
 }
 
-func TestRequestTimeOut(t *testing.T) {
+func TestRequestTimeout(t *testing.T) {
 
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		select {
-		case <-time.After(90 * time.Millisecond):
-		case <-req.Context().Done():
-		}
+		time.Sleep(90 * time.Millisecond)
 	}))
 	defer mockServer.Close()
 
 	timeout := 10 * time.Millisecond
 	r := newRunner(timeout)
-	_, err := r.hit(t.Context(), http.MethodGet, mockServer.URL, "", "")
+	got, err := r.hit(t.Context(), http.MethodGet, mockServer.URL, "", "")
 
 	if err == nil {
 		t.Error("expected timeout error, overwaited for the server response")
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("expected context deadline exceeded, got %v", err)
+		t.Errorf("expected context deadline exceeded, got res -> %v, err -> %v", got, err)
 	}
 }
 
 func TestContextCancellation(t *testing.T) {
+	started := make(chan struct{}, 1)
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		select {
-		case <-time.After(90 * time.Millisecond):
-		case <-req.Context().Done():
+		case started <- struct{}{}:
+		default:
 		}
+		<-req.Context().Done()
 	}))
 	defer mockServer.Close()
 
-	r := newRunner(defaultTimeout)
-	// [should-fix] A fixed delay does not prove the handler received the request before
-	// cancellation. On a slow machine this can exercise an already-cancelled context instead
-	// of an in-flight request. Have the handler signal a `started` channel, then cancel after
-	// the test receives that signal; concurrency tests should coordinate events, not timing.
 	ctx, cancel := context.WithCancel(t.Context())
-
-	timer := time.AfterFunc(10*time.Millisecond, cancel)
-
-	defer timer.Stop()
 	defer cancel()
 
-	_, err := r.hit(ctx, http.MethodGet, mockServer.URL, "", "")
-	if err == nil {
-		t.Fatal("expected context cancellation error, got nil")
+	finished := make(chan error, 1)
+	go func() {
+		r := newRunner(defaultTimeout)
+		_, err := r.hit(ctx, http.MethodGet, mockServer.URL, "", "")
+		finished <- err
+	}()
+
+	select {
+	case <-started:
+		cancel()
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Request not fired even after 500 milliseconds")
 	}
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("expected context cancellation message, got %v", err)
+
+	select {
+	case gotError := <-finished:
+		if gotError == nil {
+			t.Fatal("expected context cancellation error, got nil")
+		}
+		if !errors.Is(gotError, context.Canceled) {
+			t.Errorf("expected context cancellation message, got %v", gotError)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Run did not return promptly after cancellation")
 	}
+
 }

@@ -46,6 +46,9 @@ func TestPercentile(t *testing.T) {
 			p:               -0.1,
 			want:            time.Duration(10),
 		},
+		// [should-fix] Add exact p=0 and p=1 cases. The out-of-range cases exercise clamping,
+		// but they do not pin the inclusive boundaries promised by the 0..1 contract; p=0 is
+		// especially useful because nearest-rank initially computes index -1 before clamping.
 		{
 			name:            "p>1 clamps to last",
 			sortedDurations: []time.Duration{10, 20, 30, 40, 50},

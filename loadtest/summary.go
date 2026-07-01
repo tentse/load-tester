@@ -20,11 +20,6 @@ type result struct {
 	err     error
 }
 
-// [should-fix] The comment now captures the 5xx policy, but it still omits that throughput
-// and percentiles use successful requests only, and it contains grammar/spelling errors.
-// State all non-obvious exported semantics in complete sentences so callers can interpret
-// the numbers without reading summarize.
-
 // Summary reports the aggregate outcome of a load test.
 // Except for 5xx error from the server, all other response status are considered successfull.
 // Only 5xx and connection error are considered as Failed.

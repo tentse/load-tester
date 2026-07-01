@@ -2,6 +2,8 @@
 
 > Current-state handoff, last updated **2026-07-01**  
 > Module: `github.com/tentse/load-tester`  
+<!-- [should-fix] The checked-out development branch is `main`, not `Run`. Keep this handoff
+aligned with repository state so the next contributor does not branch from stale context. -->
 > Current development branch: `Run`
 
 ## Read order and document roles
@@ -163,6 +165,9 @@ The race detector and goleak answer different questions:
 
 ## Active inline review findings
 
+<!-- [should-fix] This section is stale relative to the working tree: the single-request
+cancellation test is now event-driven, but items 2 and 3 below still describe it as pending.
+Refresh both this list and the Next learning milestone after the current fixes are committed. -->
 The Go files contain the primary review notes. The owner fixes each finding and deletes its
 comment. Current themes, in priority order:
 

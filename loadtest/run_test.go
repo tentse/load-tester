@@ -18,6 +18,12 @@ func TestMain(m *testing.M) {
 
 func TestRun(t *testing.T) {
 
+	// [should-fix] Successful totals do not prove concurrency: an implementation that starts
+	// only one worker would pass every case below. Add an event-driven barrier test. Have each
+	// handler increment an in-flight counter and block on a release channel; wait until exactly
+	// Config.Concurrency handlers have started, release them, and track the maximum in flight.
+	// Assert max == Config.Concurrency and never exceeds it. Use a timeout only as a deadlock
+	// guard, not as the mechanism that makes requests overlap.
 	okMockServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer okMockServer.Close()
 	errorMockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -74,6 +80,26 @@ func TestRun(t *testing.T) {
 				Method:      http.MethodGet,
 			},
 			wantErrContains: "invalid concurrency",
+		},
+		{
+			name: "concurrency < 0",
+			cfg: Config{
+				URL:         okMockServer.URL,
+				Concurrency: -5,
+				Requests:    10,
+				Method:      http.MethodGet,
+			},
+			wantErrContains: "invalid concurrency",
+		},
+		{
+			name: "requests < 0",
+			cfg: Config{
+				URL:         okMockServer.URL,
+				Concurrency: 5,
+				Requests:    -10,
+				Method:      http.MethodGet,
+			},
+			wantErrContains: "invalid requests",
 		},
 		{
 			name: "concurrency > 0, requests = 0",
@@ -148,11 +174,8 @@ func TestRun(t *testing.T) {
 
 			got, err := Run(t.Context(), tc.cfg)
 			if tc.wantErrContains != "" {
-				// [should-fix] If err is nil, Errorf records a failure but execution continues
-				// to err.Error() below and panics. This is the test goroutine, so use Fatalf or
-				// return immediately after reporting the missing expected error.
 				if err == nil {
-					t.Errorf("expected error for test %s, got response -> %+v", tc.name, got)
+					t.Fatalf("expected error for test %s, got response -> %+v", tc.name, got)
 				}
 				if !strings.Contains(err.Error(), tc.wantErrContains) {
 					t.Errorf("error = %q, want it to contain %q", err.Error(), tc.wantErrContains)
@@ -210,6 +233,11 @@ func TestRun(t *testing.T) {
 
 func TestRunCancellation(t *testing.T) {
 
+	// [should-fix] This test checks the context error but not Run's documented partial-Summary
+	// contract. Make the count deterministic with Concurrency=1, wait for its one request to
+	// start, then cancel. Assert Total=1, Succeeded=0, Failed=1, the error count is one, and
+	// Total < Requests. Also add an already-canceled-context case that proves zero HTTP
+	// requests are started and a zero-but-initialized partial summary is returned.
 	started := make(chan struct{}, 1)
 
 	okMockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {

@@ -7,10 +7,6 @@ import (
 	"time"
 )
 
-// [should-fix] This begins with Config now, but it is a run-on description with grammar
-// errors and does not clearly state the validation contract. Keep the first sentence short,
-// then document that URL, Method, Concurrency, Requests, and Timeout are required while
-// Token and Body are optional.
 // Config is the configuration of your request test such as URL, number of concurrency you want
 // number of requests you want to hit your url and what should be the timeout limit, what is the method
 // of the endpoint or url you are testing and all required parameter for your endpoint such as Token, Body
@@ -34,6 +30,10 @@ func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, job
 			if !ok {
 				return
 			}
+			// [should-fix] Direct time.Now/time.Since calls prevent a deterministic test of the
+			// most important metric: latency must include the entire body read. Inject a small
+			// clock/timing seam so a test can advance time around hit without sleeping; otherwise
+			// the current `P50 > 0` assertions would still pass if the timing boundaries moved.
 			start := time.Now()
 			status, err := r.hit(ctx, cfg.Method, cfg.URL, cfg.Token, cfg.Body)
 			results <- result{latency: time.Since(start), status: status, err: err}
@@ -41,10 +41,7 @@ func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, job
 	}
 }
 
-// [should-fix] This function now returns only error, so the `is...` prefix is misleading:
-// Go readers expect an `is` helper to return bool. Prefer a validation-oriented name such as
-// `validateConfig`, which describes both the action and the error-only result.
-func isConfigValid(cfg Config) error {
+func validateConfig(cfg Config) error {
 	// [should-fix] This only rejects an empty URL. A malformed non-empty target still starts
 	// every worker, records the same request-construction error repeatedly, and returns no
 	// top-level Run error. Validate the target syntax once here so bad configuration fails fast.
@@ -66,12 +63,9 @@ func isConfigValid(cfg Config) error {
 	return nil
 }
 
-// [should-fix] Run is exported but has no godoc comment. Document validation, the partial
-// Summary returned on cancellation, and that callers should inspect the error with errors.Is
-// for context.Canceled/context.DeadlineExceeded.
 func Run(ctx context.Context, config Config) (Summary, error) {
 
-	err := isConfigValid(config)
+	err := validateConfig(config)
 	if err != nil {
 		return Summary{}, err
 	}
@@ -79,6 +73,11 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 	jobs := make(chan struct{})
 	results := make(chan result)
 	r := newRunner(config.Timeout)
+	// [should-fix] Each Run owns a freshly cloned Transport. Once all workers finish, explicitly
+	// close its idle connections before returning; otherwise repeated library calls can leave
+	// many idle sockets and transport goroutines around until IdleConnTimeout expires. This is
+	// separate from closing response bodies: body closure makes a connection reusable, while
+	// CloseIdleConnections releases the per-run pool when the run is over.
 
 	elapsedStart := time.Now()
 
