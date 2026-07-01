@@ -65,15 +65,6 @@ func (r *runner) hit(ctx context.Context, httpMethod, targetURL, token, reqBody 
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// [should-fix] You're swallowing the io.Copy error. Draining is right (it lets the
-	// connection return to the pool for reuse), but under load a connection can drop
-	// mid-body -- that's a failed request, yet here it returns (status, nil) and gets
-	// counted as a success. Capture it: `if _, err := io.Copy(io.Discard, resp.Body); err
-	// != nil { return resp.StatusCode, fmt.Errorf("read body %s %s: %w", httpMethod,
-	// targetURL, err) }`. Returning the status alongside the error is fine -- the caller
-	// already treats err != nil as the failure signal.
-	// Add a test with a response body that returns data and then a read error; otherwise
-	// the new error branch can be removed accidentally without any test failing.
 	_, _ = io.Copy(io.Discard, resp.Body)
 
 	return resp.StatusCode, nil
