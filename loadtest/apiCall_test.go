@@ -30,7 +30,13 @@ func checkRequest(t *testing.T, tc hitCase) http.HandlerFunc {
 		}
 
 		if tc.reqBody != "" {
-			body, _ := io.ReadAll(r.Body)
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("error occurred when reading body content. err -> %v", err)
+				// [should-fix] Return after reporting this read failure. Continuing compares a
+				// partial/invalid body and can produce misleading secondary failures that hide
+				// the operation that actually broke.
+			}
 			if string(body) != tc.reqBody {
 				t.Errorf("body = %q, want %q", body, tc.reqBody)
 			}
@@ -181,27 +187,22 @@ func TestContextCancellation(t *testing.T) {
 	defer mockServer.Close()
 
 	r := newRunner(defaultTimeout)
+	// [should-fix] A fixed delay does not prove the handler received the request before
+	// cancellation. On a slow machine this can exercise an already-cancelled context instead
+	// of an in-flight request. Have the handler signal a `started` channel, then cancel after
+	// the test receives that signal; concurrency tests should coordinate events, not timing.
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
 
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		cancel()
-	}()
+	timer := time.AfterFunc(10*time.Millisecond, cancel)
+
+	defer timer.Stop()
+	defer cancel()
 
 	_, err := r.hit(ctx, http.MethodGet, mockServer.URL, "", "")
 	if err == nil {
-		t.Fatal("expected context timeout error, got nil")
+		t.Fatal("expected context cancellation error, got nil")
 	}
 	if !errors.Is(err, context.Canceled) {
-		t.Errorf("expected context deadline exceeded, got %v", err)
+		t.Errorf("expected context cancellation message, got %v", err)
 	}
 }
-
-// [should-fix] Coverage gap, important for this project: nothing tests that ctx cancellation
-// actually reaches an in-flight request. For a load tester that's the headline feature --
-// Ctrl+C / a timeout MUST abort live requests. Future test: a slow handler + a context you
-// cancel mid-flight, then assert hit() returns quickly with errors.Is(err, context.Canceled).
-//
-// Reminder: run `go test -race ./...`. Once Run() drives many goroutines through the shared
-// http.Client, the race detector is the only thing that'll catch unsynchronized access.

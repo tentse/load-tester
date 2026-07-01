@@ -72,6 +72,8 @@ func (r *runner) hit(ctx context.Context, httpMethod, targetURL, token, reqBody 
 	// != nil { return resp.StatusCode, fmt.Errorf("read body %s %s: %w", httpMethod,
 	// targetURL, err) }`. Returning the status alongside the error is fine -- the caller
 	// already treats err != nil as the failure signal.
+	// Add a test with a response body that returns data and then a read error; otherwise
+	// the new error branch can be removed accidentally without any test failing.
 	_, _ = io.Copy(io.Discard, resp.Body)
 
 	return resp.StatusCode, nil

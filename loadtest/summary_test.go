@@ -206,6 +206,29 @@ func TestSummary(t *testing.T) {
 				Errors:     map[string]int{},
 			},
 		},
+		{
+			name: "unknown status code: 789 response",
+			results: []result{
+				{
+					latency: 10 * time.Millisecond,
+					status:  789,
+				},
+			},
+			elapsed: 1 * time.Second,
+			want: Summary{
+				Total:      1,
+				Succeeded:  0,
+				Failed:     1,
+				Elapsed:    1 * time.Second,
+				Throughput: 0,
+				P50:        0,
+				P90:        0,
+				P99:        0,
+				Errors: map[string]int{
+					"HTTP 789": 1,
+				},
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -216,5 +239,4 @@ func TestSummary(t *testing.T) {
 			}
 		})
 	}
-
 }

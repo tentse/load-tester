@@ -7,6 +7,13 @@ import (
 	"time"
 )
 
+// [should-fix] This begins with Config now, but it is a run-on description with grammar
+// errors and does not clearly state the validation contract. Keep the first sentence short,
+// then document that URL, Method, Concurrency, Requests, and Timeout are required while
+// Token and Body are optional.
+// Config is the configuration of your request test such as URL, number of concurrency you want
+// number of requests you want to hit your url and what should be the timeout limit, what is the method
+// of the endpoint or url you are testing and all required parameter for your endpoint such as Token, Body
 type Config struct {
 	URL         string
 	Concurrency int
@@ -23,7 +30,6 @@ func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, job
 		select {
 		case <-ctx.Done():
 			return
-
 		case _, ok := <-jobs:
 			if !ok {
 				return
@@ -35,23 +41,38 @@ func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, job
 	}
 }
 
-func isConfigValid(cfg *Config) (bool, error) {
+// [should-fix] This function now returns only error, so the `is...` prefix is misleading:
+// Go readers expect an `is` helper to return bool. Prefer a validation-oriented name such as
+// `validateConfig`, which describes both the action and the error-only result.
+func isConfigValid(cfg Config) error {
+	// [should-fix] This only rejects an empty URL. A malformed non-empty target still starts
+	// every worker, records the same request-construction error repeatedly, and returns no
+	// top-level Run error. Validate the target syntax once here so bad configuration fails fast.
+	if cfg.URL == "" {
+		return fmt.Errorf("invalid url -> %v", cfg.URL)
+	}
+	if cfg.Method == "" {
+		return fmt.Errorf("invalid method -> %v", cfg.Method)
+	}
 	if cfg.Concurrency <= 0 {
-		return false, fmt.Errorf("invalid concurrency value received -> %d", cfg.Concurrency)
+		return fmt.Errorf("invalid concurrency -> %d", cfg.Concurrency)
 	}
 	if cfg.Requests <= 0 {
-		return false, fmt.Errorf("invalid requests value received -> %d", cfg.Requests)
+		return fmt.Errorf("invalid requests -> %d", cfg.Requests)
 	}
 	if cfg.Timeout <= 0 {
-		return false, fmt.Errorf("invalid timeout value received -> %d", cfg.Timeout)
+		return fmt.Errorf("invalid timeout -> %v", cfg.Timeout)
 	}
-	return true, nil
+	return nil
 }
 
+// [should-fix] Run is exported but has no godoc comment. Document validation, the partial
+// Summary returned on cancellation, and that callers should inspect the error with errors.Is
+// for context.Canceled/context.DeadlineExceeded.
 func Run(ctx context.Context, config Config) (Summary, error) {
 
-	isValidConfig, err := isConfigValid(&config)
-	if !isValidConfig {
+	err := isConfigValid(config)
+	if err != nil {
 		return Summary{}, err
 	}
 
@@ -63,8 +84,12 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 
 	go func() {
 		defer close(jobs)
-		for i := 1; i <= config.Requests; i++ {
-			jobs <- struct{}{}
+		for range config.Requests {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- struct{}{}:
+			}
 		}
 	}()
 
@@ -86,5 +111,5 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 		collectedResult = append(collectedResult, res)
 	}
 
-	return summarize(collectedResult, time.Since(elapsedStart)), nil
+	return summarize(collectedResult, time.Since(elapsedStart)), ctx.Err()
 }

@@ -7,6 +7,9 @@ import (
 
 func TestPercentile(t *testing.T) {
 
+	// [should-fix] Add an even-sized p50 case. Nearest-rank percentile selection is not the
+	// same as averaging the two middle values, so this boundary deserves a hand-checked test
+	// that records the intended behavior for future readers.
 	tests := []struct {
 		name            string
 		sortedDurations []time.Duration
