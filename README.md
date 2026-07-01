@@ -7,15 +7,16 @@ came back.
 
 I'm building it from scratch to get properly comfortable with Go's concurrency model —
 goroutines, channels, `context`, `sync` — and to end up with something I'd actually be
-happy to put in front of people. It leans on the standard library by design; no
-third-party dependencies.
+happy to put in front of people. Production code uses only the standard library by design.
+Tests use `go.uber.org/goleak` to detect goroutines that fail to exit.
 
 ## Status
 
-Work in progress. The request engine — the part that fires a single HTTP request and
-measures it — is written and tested. The layer that drives many of those at once, and the
-command-line front end, aren't wired up yet, so there's nothing to `go run` at the moment.
-The tests are the place to look.
+Work in progress. The single-request HTTP layer, aggregation logic, and concurrent `Run`
+engine are implemented and tested, including context cancellation, race detection, and
+goroutine-leak checks. The command-line front end is not wired up yet, so there is still
+nothing to `go run` at the moment. The current work is hardening the library's edge cases
+before starting the CLI.
 
 When it's finished, running it should look roughly like:
 
@@ -54,7 +55,7 @@ If you run only one of them, make it `go test -race ./...`.
 
 ## Layout
 
-- `loadtest/` — the library. The public API (`Config`, `Run`, `Summary`) will live here, so
+- `loadtest/` — the library. The public API (`Config`, `Run`, `Summary`) lives here, so
   the tool can be imported and not just run from the terminal.
 - `cmd/loadtester/` — the command-line entry point. Thin on purpose: parse the flags, call
   the library, print the results.
