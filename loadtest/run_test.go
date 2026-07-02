@@ -20,10 +20,6 @@ func TestRun(t *testing.T) {
 
 	okMockServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer okMockServer.Close()
-	errorMockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer errorMockServer.Close()
 
 	tests := []struct {
 		name            string
@@ -46,9 +42,116 @@ func TestRun(t *testing.T) {
 				Succeeded: 10,
 				Failed:    0,
 			},
-			wantStats:       true,
-			wantErrContains: "",
+			wantStats: true,
 		},
+		{
+			name: "healthy server, concurrency > requests get method",
+			cfg: Config{
+				URL:         okMockServer.URL,
+				Concurrency: 10,
+				Requests:    5,
+				Timeout:     time.Duration(10) * time.Second,
+				Method:      http.MethodGet,
+			},
+			want: Summary{
+				Total:     5,
+				Succeeded: 5,
+				Failed:    0,
+			},
+			wantStats: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+
+			got, err := Run(t.Context(), tc.cfg)
+			if err != nil {
+				t.Fatalf("unexpected error occurred when calling Run(): %v", err)
+			}
+			assertEqual(t, "total", got.Total, tc.want.Total)
+			assertEqual(t, "succeeded", got.Succeeded, tc.want.Succeeded)
+			assertEqual(t, "failed", got.Failed, tc.want.Failed)
+
+			assertPositiveStats(t, "throughput", got.Throughput)
+			assertPositiveStats(t, "P50", float64(got.P50))
+			assertPositiveStats(t, "P90", float64(got.P90))
+			assertPositiveStats(t, "P99", float64(got.P99))
+			if len(got.Errors) > 0 {
+				t.Errorf("expected no errors, got -> %+v", got.Errors)
+			}
+
+		})
+	}
+}
+
+func TestServerErrors(t *testing.T) {
+	errorMockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer errorMockServer.Close()
+
+	tests := []struct {
+		name            string
+		cfg             Config
+		want            Summary
+		wantErrContains string
+		wantStats       bool
+	}{
+		{
+			name: "all 500s",
+			cfg: Config{
+				URL:         errorMockServer.URL,
+				Concurrency: 5,
+				Requests:    10,
+				Timeout:     time.Duration(10) * time.Second,
+				Method:      http.MethodGet,
+			},
+			want: Summary{
+				Total:     10,
+				Succeeded: 0,
+				Failed:    10,
+			},
+			wantStats: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+
+			got, err := Run(t.Context(), tc.cfg)
+			if err != nil {
+				t.Fatalf("unexpected error occurred when calling Run(): %v", err)
+			}
+			assertEqual(t, "total", got.Total, tc.want.Total)
+			assertEqual(t, "succeeded", got.Succeeded, tc.want.Succeeded)
+			assertEqual(t, "failed", got.Failed, tc.want.Failed)
+
+			assertEqual(t, "throughput", got.Throughput, 0)
+			assertEqual(t, "P50", got.P50, 0)
+			assertEqual(t, "P90", got.P90, 0)
+			assertEqual(t, "P99", got.P99, 0)
+
+			if got.Errors["internal server error"] != tc.want.Failed {
+				t.Errorf("got internal server error -> %d, want internal server error -> %d", got.Errors["internal server error"], tc.want.Failed)
+			}
+
+		})
+	}
+}
+
+func TestValidateConfig(t *testing.T) {
+
+	okMockServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer okMockServer.Close()
+
+	tests := []struct {
+		name            string
+		cfg             Config
+		want            Summary
+		wantErrContains string
+		wantStats       bool
+	}{
 		{
 			name: "empty get method",
 			cfg: Config{
@@ -128,78 +231,19 @@ func TestRun(t *testing.T) {
 			},
 			wantErrContains: "invalid url",
 		},
-		{
-			name: "all 500s",
-			cfg: Config{
-				URL:         errorMockServer.URL,
-				Concurrency: 5,
-				Requests:    10,
-				Timeout:     time.Duration(10) * time.Second,
-				Method:      http.MethodGet,
-			},
-			want: Summary{
-				Total:     10,
-				Succeeded: 0,
-				Failed:    10,
-			},
-			wantStats: false,
-		},
-		{
-			name: "healthy server, concurrency > requests get method",
-			cfg: Config{
-				URL:         okMockServer.URL,
-				Concurrency: 10,
-				Requests:    5,
-				Timeout:     time.Duration(10) * time.Second,
-				Method:      http.MethodGet,
-			},
-			want: Summary{
-				Total:     5,
-				Succeeded: 5,
-				Failed:    0,
-			},
-			wantStats:       true,
-			wantErrContains: "",
-		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 
 			got, err := Run(t.Context(), tc.cfg)
-			if tc.wantErrContains != "" {
-				if err == nil {
-					t.Fatalf("expected error for test %s, got response -> %+v", tc.name, got)
-				}
-				if !strings.Contains(err.Error(), tc.wantErrContains) {
-					t.Errorf("error = %q, want it to contain %q", err.Error(), tc.wantErrContains)
-				}
-			} else {
-				if err != nil {
-					t.Fatalf("unexpected error occurred when calling Run(): %v", err)
-				}
-				assertEqual(t, "total", got.Total, tc.want.Total)
-				assertEqual(t, "succeeded", got.Succeeded, tc.want.Succeeded)
-				assertEqual(t, "failed", got.Failed, tc.want.Failed)
-				if tc.wantStats == true {
-					assertPositiveStats(t, "throughput", got.Throughput)
-					assertPositiveStats(t, "P50", float64(got.P50))
-					assertPositiveStats(t, "P90", float64(got.P90))
-					assertPositiveStats(t, "P99", float64(got.P99))
-					if len(got.Errors) > 0 {
-						t.Errorf("expected no errors, got -> %+v", got.Errors)
-					}
-				} else {
-					assertEqual(t, "throughput", got.Throughput, 0)
-					assertEqual(t, "P50", got.P50, 0)
-					assertEqual(t, "P90", got.P90, 0)
-					assertEqual(t, "P99", got.P99, 0)
-
-					if got.Errors["internal server error"] != tc.want.Failed {
-						t.Errorf("got internal server error -> %d, want internal server error -> %d", got.Errors["internal server error"], tc.want.Failed)
-					}
-				}
+			if err == nil {
+				t.Fatalf("expected error for test %s, got response -> %+v", tc.name, got)
 			}
+			if !strings.Contains(err.Error(), tc.wantErrContains) {
+				t.Errorf("error = %q, want it to contain %q", err.Error(), tc.wantErrContains)
+			}
+
 		})
 	}
 }

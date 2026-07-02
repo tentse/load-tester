@@ -219,3 +219,47 @@ func TestContextCancellation(t *testing.T) {
 	}
 
 }
+
+func TestResponseBodyError(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("response writer does not support hijacking")
+		}
+
+		conn, rw, err := hijacker.Hijack()
+
+		if err != nil {
+			t.Errorf("hijack connection: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		_, err = rw.WriteString(
+			"HTTP/1.1 200 OK\r\n" +
+				"Content-Length: 100\r\n" +
+				"Connection: close\r\n" +
+				"\r\n" +
+				"short",
+		)
+		if err != nil {
+			t.Errorf("write raw response err: %v", err)
+		}
+
+		if err := rw.Flush(); err != nil {
+			t.Errorf("flush raw response err: %v", err)
+		}
+	}))
+	defer mockServer.Close()
+
+	r := newRunner(defaultTimeout)
+
+	_, err := r.hit(t.Context(), http.MethodGet, mockServer.URL, "", "")
+
+	if err == nil {
+		t.Fatal("hit() error = nil, want body-read error")
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Errorf("error = %v, want %v", err, io.ErrUnexpectedEOF)
+	}
+}

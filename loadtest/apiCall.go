@@ -65,7 +65,9 @@ func (r *runner) hit(ctx context.Context, httpMethod, targetURL, token, reqBody 
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	_, _ = io.Copy(io.Discard, resp.Body)
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		return 0, fmt.Errorf("read response body: %w", err)
+	}
 
 	return resp.StatusCode, nil
 }
