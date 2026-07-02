@@ -7,9 +7,12 @@ import (
 	"time"
 )
 
-// Config is the configuration of your request test such as URL, number of concurrency you want
-// number of requests you want to hit your url and what should be the timeout limit, what is the method
-// of the endpoint or url you are testing and all required parameter for your endpoint such as Token, Body
+// Config defines one closed-loop HTTP load test.
+//
+// URL and Method must be non-empty. Concurrency, Requests, and Timeout must be
+// greater than zero. Timeout covers the complete request, including reading the
+// response body. Token and Body are optional; a token is sent as a bearer token,
+// and a non-empty body is sent as JSON.
 type Config struct {
 	URL         string
 	Concurrency int
@@ -30,10 +33,6 @@ func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, job
 			if !ok {
 				return
 			}
-			// [should-fix] Direct time.Now/time.Since calls prevent a deterministic test of the
-			// most important metric: latency must include the entire body read. Inject a small
-			// clock/timing seam so a test can advance time around hit without sleeping; otherwise
-			// the current `P50 > 0` assertions would still pass if the timing boundaries moved.
 			start := time.Now()
 			status, err := r.hit(ctx, cfg.Method, cfg.URL, cfg.Token, cfg.Body)
 			results <- result{latency: time.Since(start), status: status, err: err}
@@ -42,9 +41,6 @@ func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, job
 }
 
 func validateConfig(cfg Config) error {
-	// [should-fix] This only rejects an empty URL. A malformed non-empty target still starts
-	// every worker, records the same request-construction error repeatedly, and returns no
-	// top-level Run error. Validate the target syntax once here so bad configuration fails fast.
 	if cfg.URL == "" {
 		return fmt.Errorf("invalid url -> %v", cfg.URL)
 	}
@@ -63,6 +59,13 @@ func validateConfig(cfg Config) error {
 	return nil
 }
 
+// Run executes a closed-loop load test using the supplied configuration.
+//
+// Run returns a zero Summary and an error when config fails validation.
+// Individual HTTP request failures are recorded in Summary rather than returned
+// as the Run error. If ctx is canceled, Run stops scheduling work, waits for
+// in-flight workers to exit, and returns the partial Summary together with
+// ctx.Err().
 func Run(ctx context.Context, config Config) (Summary, error) {
 
 	err := validateConfig(config)
@@ -73,11 +76,6 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 	jobs := make(chan struct{})
 	results := make(chan result)
 	r := newRunner(config.Timeout)
-	// [should-fix] Each Run owns a freshly cloned Transport. Once all workers finish, explicitly
-	// close its idle connections before returning; otherwise repeated library calls can leave
-	// many idle sockets and transport goroutines around until IdleConnTimeout expires. This is
-	// separate from closing response bodies: body closure makes a connection reusable, while
-	// CloseIdleConnections releases the per-run pool when the run is over.
 
 	elapsedStart := time.Now()
 

@@ -20,27 +20,34 @@ type hitCase struct {
 	mockStatus int
 }
 
+func assertEqual[T comparable](t *testing.T, field string, got, want T) {
+	t.Helper()
+	if got != want {
+		t.Errorf("%s = %v, want %v", field, got, want)
+	}
+}
+
+func assertPositiveStats(t *testing.T, field string, got float64) {
+	t.Helper()
+	if got <= 0.0 {
+		t.Errorf("%s = %f, want > 0", field, got)
+	}
+}
+
 func checkRequest(t *testing.T, tc hitCase) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != tc.httpMethod {
-			t.Errorf("method = %q, want %q", r.Method, tc.httpMethod)
-		}
-		if got := r.Header.Get("Authorization"); got != tc.wantAuth {
-			t.Errorf("authorization = %q, want %q", got, tc.wantAuth)
-		}
+		assertEqual(t, "method", r.Method, tc.httpMethod)
+		assertEqual(t, "authorization", r.Header.Get("Authorization"), tc.wantAuth)
 
 		if tc.reqBody != "" {
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
 				t.Errorf("error occurred when reading body content. err -> %v", err)
+				w.WriteHeader(tc.mockStatus)
 				return
 			}
-			if string(body) != tc.reqBody {
-				t.Errorf("body = %q, want %q", body, tc.reqBody)
-			}
-			if got := r.Header.Get("Content-Type"); got != "application/json" {
-				t.Errorf("content-Type = %q, want application/json", got)
-			}
+			assertEqual(t, "body", string(body), tc.reqBody)
+			assertEqual(t, "content-type", r.Header.Get("Content-Type"), "application/json")
 		} else if got := r.Header.Get("Content-Type"); got != "" {
 			t.Errorf("reqBody empty but content type present = %q", got)
 		}
@@ -211,4 +218,48 @@ func TestContextCancellation(t *testing.T) {
 		t.Fatal("Run did not return promptly after cancellation")
 	}
 
+}
+
+func TestResponseBodyError(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("response writer does not support hijacking")
+		}
+
+		conn, rw, err := hijacker.Hijack()
+
+		if err != nil {
+			t.Errorf("hijack connection: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		_, err = rw.WriteString(
+			"HTTP/1.1 200 OK\r\n" +
+				"Content-Length: 100\r\n" +
+				"Connection: close\r\n" +
+				"\r\n" +
+				"short",
+		)
+		if err != nil {
+			t.Errorf("write raw response err: %v", err)
+		}
+
+		if err := rw.Flush(); err != nil {
+			t.Errorf("flush raw response err: %v", err)
+		}
+	}))
+	defer mockServer.Close()
+
+	r := newRunner(defaultTimeout)
+
+	_, err := r.hit(t.Context(), http.MethodGet, mockServer.URL, "", "")
+
+	if err == nil {
+		t.Fatal("hit() error = nil, want body-read error")
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Errorf("error = %v, want %v", err, io.ErrUnexpectedEOF)
+	}
 }

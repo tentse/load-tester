@@ -20,9 +20,14 @@ type result struct {
 	err     error
 }
 
-// Summary reports the aggregate outcome of a load test.
-// Except for 5xx error from the server, all other response status are considered successfull.
-// Only 5xx and connection error are considered as Failed.
+// Summary reports the completed portion of a load test.
+//
+// A request succeeds when it completes without an error and its HTTP status is
+// less than 500. Request errors and statuses of 500 or greater are failures.
+// Total counts completed request attempts, so it can be less than Config.Requests
+// after cancellation. Elapsed is the wall-clock run duration. Throughput is
+// successful requests per second, and P50, P90, and P99 are nearest-rank
+// successful-request latencies. Errors groups failure descriptions by occurrence.
 type Summary struct {
 	Total      int
 	Succeeded  int

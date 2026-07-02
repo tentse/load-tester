@@ -10,10 +10,6 @@ import (
 
 func TestSummary(t *testing.T) {
 
-	// [should-fix] The public status policy is buried inside large fixtures. Add focused,
-	// hand-checkable cases at the exact boundary: 499 succeeds and 500 fails. This gives a
-	// classification regression one obvious failure instead of making the reader reverse-
-	// engineer percentile and count changes in the mixed 15-result case.
 	tests := []struct {
 		name    string
 		results []result

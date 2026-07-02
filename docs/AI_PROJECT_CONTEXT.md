@@ -2,9 +2,7 @@
 
 > Current-state handoff, last updated **2026-07-01**  
 > Module: `github.com/tentse/load-tester`  
-<!-- [should-fix] The checked-out development branch is `main`, not `Run`. Keep this handoff
-aligned with repository state so the next contributor does not branch from stale context. -->
-> Current development branch: `Run`
+> Current development branch: `main`
 
 ## Read order and document roles
 
@@ -165,33 +163,17 @@ The race detector and goleak answer different questions:
 
 ## Active inline review findings
 
-<!-- [should-fix] This section is stale relative to the working tree: the single-request
-cancellation test is now event-driven, but items 2 and 3 below still describe it as pending.
-Refresh both this list and the Next learning milestone after the current fixes are committed. -->
-The Go files contain the primary review notes. The owner fixes each finding and deletes its
-comment. Current themes, in priority order:
-
-1. Handle response-body read errors instead of reporting success.
-2. Replace the remaining timer-based single-request cancellation coordination with an
-   event-driven signal.
-3. Clarify `Config`, `Run`, and `Summary` godoc; rename the error-returning validation helper
-   and fail fast on malformed target URLs.
-4. Prevent the validation test from dereferencing a nil error after recording a failure.
-5. Align percentile documentation with clamping behavior and add an even-sized p50 case.
-
-No current inline finding is tagged `[blocker]`. Normal, race, and leak tests are green, but
-passing tests do not remove the coverage and API-clarity work above.
+One inline review finding remains: `runner.hit` discards errors returned while reading the
+response body. It is tagged `[blocker]` because a truncated response can currently be counted
+as successful, which makes the reported results incorrect.
 
 ## Next learning milestone
 
-Finish the remaining `Run` hardening before beginning the CLI:
+Fix response-body result correctness before beginning the CLI:
 
-1. Work through inline review comments one at a time, deleting each after its fix is tested.
-2. Make response-body read failures observable and add a failing-body test.
-3. Make the remaining `hit` cancellation test event-driven.
-4. Finish public godoc, validation naming, and malformed-URL fail-fast behavior.
-5. Align the percentile contract and add the even-sized p50 case.
-6. Run the complete normal, race, leak, lint, and vet checks.
+1. Add a deterministic test whose response body returns data followed by a read error.
+2. Make response-body read failures observable to aggregation.
+3. Run the complete normal, race, leak, lint, and vet checks.
 
 Only then begin the CLI milestone.
 
