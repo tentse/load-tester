@@ -76,14 +76,14 @@ func getSummaryText(summary loadtest.Summary) string {
 	if summary.Succeeded == 0 {
 		b.WriteString("P50: n/a\nP90: n/a\nP99: n/a\n")
 	} else {
-		b.WriteString(fmt.Sprintf(
+		fmt.Fprintf(&b,
 			"P50: %v\n"+
 				"P90: %v\n"+
 				"P99: %v\n",
 			summary.P50,
 			summary.P90,
 			summary.P99,
-		))
+		)
 	}
 
 	errors := make([]errorCount, 0, len(summary.Errors))
@@ -110,7 +110,7 @@ func getSummaryText(summary loadtest.Summary) string {
 	})
 
 	for _, entry := range errors {
-		b.WriteString(fmt.Sprintf("  %s: %d\n", entry.message, entry.count))
+		fmt.Fprintf(&b, "  %s: %d\n", entry.message, entry.count)
 	}
 
 	return b.String()
