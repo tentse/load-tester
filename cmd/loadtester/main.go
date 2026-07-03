@@ -1,10 +1,13 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/tentse/load-tester/loadtest"
 )
@@ -15,8 +18,33 @@ type errorCount struct {
 }
 
 func parseConfig(args []string, stderr io.Writer) (loadtest.Config, error) {
+	fs := flag.NewFlagSet("loadtester", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 
-	return loadtest.Config{}, nil
+	targetURL := fs.String("url", "", "target URL (required)")
+	concurrency := fs.Int("c", 1, "number of concurrent worker")
+	requests := fs.Int("n", 1, "total number of requests")
+	method := fs.String("method", http.MethodGet, "HTTP method")
+	token := fs.String("token", "", "bearer token")
+	body := fs.String("body", "", "JSON request body")
+	timeout := fs.Duration("timeout", 1*time.Second, "per request timeout")
+
+	if err := fs.Parse(args); err != nil {
+		return loadtest.Config{}, fmt.Errorf("parse flags: %w", err)
+	}
+	if *targetURL == "" {
+		return loadtest.Config{}, fmt.Errorf("-url is required")
+	}
+
+	return loadtest.Config{
+		URL:         *targetURL,
+		Concurrency: *concurrency,
+		Requests:    *requests,
+		Method:      *method,
+		Token:       *token,
+		Body:        *body,
+		Timeout:     *timeout,
+	}, nil
 }
 
 func render(w io.Writer, summary loadtest.Summary) error {
@@ -31,7 +59,7 @@ func render(w io.Writer, summary loadtest.Summary) error {
 func getSummaryText(summary loadtest.Summary) string {
 	var b strings.Builder
 
-	b.WriteString(fmt.Sprintf(
+	fmt.Fprintf(&b,
 		"Load test summary\n"+
 			"Total: %d\n"+
 			"Succeeded: %d\n"+
@@ -43,7 +71,7 @@ func getSummaryText(summary loadtest.Summary) string {
 		summary.Failed,
 		summary.Elapsed,
 		summary.Throughput,
-	))
+	)
 
 	if summary.Succeeded == 0 {
 		b.WriteString("P50: n/a\nP90: n/a\nP99: n/a\n")
