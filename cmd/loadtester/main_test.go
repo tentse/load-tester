@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -10,6 +11,14 @@ import (
 	"github.com/tentse/load-tester/loadtest"
 )
 
+var errWrite = errors.New("deliberate write failure")
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errWrite
+}
+
 type parseConfigCase struct {
 	name            string
 	args            []string
@@ -17,203 +26,181 @@ type parseConfigCase struct {
 	wantErrContains string
 }
 
-func TestParseConfigDefaults(t *testing.T) {
+func TestMissingURL(t *testing.T) {
 	var stderr bytes.Buffer
-
-	got, err := parseConfig(
-		[]string{
-			"-url", "http://example.com",
-		},
-		&stderr,
-	)
-	if err != nil {
-		t.Fatalf("parseConfig() error = %v, want nil", err)
-	}
-
-	want := loadtest.Config{
-		URL:         "http://example.com",
-		Concurrency: 1,
-		Requests:    1,
-		Timeout:     1 * time.Second,
-		Method:      http.MethodGet,
-		Token:       "",
-		Body:        "",
-	}
-
-	if got != want {
-		t.Errorf("parseConfig() = %+v, want %+v", got, want)
-	}
-
-	if got := stderr.String(); got != "" {
-		t.Errorf("stderr = %q, want empty", got)
+	wantErrContains := "-url is required"
+	_, err := parseConfig([]string{"-c", "10", "-n", "100"}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), wantErrContains) {
+		t.Fatalf("parseConfig() err = %v, want to contain %q", err, wantErrContains)
 	}
 }
 
-func TestParseConfigMissingValue(t *testing.T) {
-
+func TestInvalidValue(t *testing.T) {
 	tests := []parseConfigCase{
 		{
-			name: "absent url",
+			name: "invalid concurrency value",
 			args: []string{
-				"-method", "GET",
-				"-timeout", "5s",
-				"-n", "1000",
-				"-c", "50",
-				"-token", "secret-token",
-				"-body", `{"name": "test"}`,
-			},
-			wantErrContains: "-url is required",
-		},
-		{
-			name: "absent concurrency",
-			args: []string{
-				"-url", "http://example.com",
-				"-method", "GET",
-				"-timeout", "5s",
-				"-n", "1000",
-				"-token", "secret-token",
-				"-body", `{"name": "test"}`,
-			},
-			want: loadtest.Config{
-				URL:         "http://example.com",
-				Concurrency: 1,
-				Requests:    1000,
-				Timeout:     5 * time.Second,
-				Method:      http.MethodGet,
-				Token:       "secret-token",
-				Body:        `{"name": "test"}`,
-			},
-		},
-		{
-			name: "absent requests",
-			args: []string{
-				"-url", "http://example.com",
-				"-method", "GET",
-				"-timeout", "5s",
-				"-c", "10",
-				"-token", "secret-token",
-				"-body", `{"name": "test"}`,
-			},
-			want: loadtest.Config{
-				URL:         "http://example.com",
-				Concurrency: 10,
-				Requests:    1,
-				Timeout:     5 * time.Second,
-				Method:      http.MethodGet,
-				Token:       "secret-token",
-				Body:        `{"name": "test"}`,
-			},
-		},
-		{
-			name: "absent method",
-			args: []string{
-				"-url", "http://example.com",
-				"-timeout", "5s",
-				"-c", "10",
-				"-n", "1000",
-				"-token", "secret-token",
-				"-body", `{"name": "test"}`,
-			},
-			want: loadtest.Config{
-				URL:         "http://example.com",
-				Concurrency: 10,
-				Requests:    1000,
-				Timeout:     5 * time.Second,
-				Method:      http.MethodGet,
-				Token:       "secret-token",
-				Body:        `{"name": "test"}`,
-			},
-		},
-		{
-			name: "absent timeout",
-			args: []string{
-				"-url", "http://example.com",
-				"-c", "10",
-				"-n", "1000",
-				"-token", "secret-token",
-				"-body", `{"name": "test"}`,
-			},
-			want: loadtest.Config{
-				URL:         "http://example.com",
-				Concurrency: 10,
-				Requests:    1000,
-				Timeout:     1 * time.Second,
-				Method:      http.MethodGet,
-				Token:       "secret-token",
-				Body:        `{"name": "test"}`,
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var stderr bytes.Buffer
-			got, err := parseConfig(tc.args, &stderr)
-			if tc.wantErrContains != "" {
-				if err == nil {
-					t.Fatalf("parseConfig err = nil, want = %q", tc.wantErrContains)
-				}
-				if !strings.Contains(err.Error(), tc.wantErrContains) {
-					t.Errorf("parseConfig() err = %q, want = %q", err.Error(), tc.wantErrContains)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("parseConfig() unexpected error = %v", err)
-			}
-			if tc.want != got {
-				t.Errorf("parseConfig() got = %v, want = %v", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestParseConfigInvalidValue(t *testing.T) {
-	tests := []parseConfigCase{
-		{
-			name: "invalid concurrency",
-			args: []string{
-				"-url", "http://example.com",
-				"-method", "GET",
-				"-timeout", "5s",
-				"-n", "1000",
-				"-c", "invalid",
-				"-token", "secret-token",
-				"-body", `{"name": "test"}`,
+				"-url", "http://www.example.com",
+				"-c", "invalidConcurrency",
 			},
 			wantErrContains: "flag -c",
 		},
 		{
-			name: "invalid requests",
+			name: "invalid requests value",
 			args: []string{
-				"-url", "http://example.com",
-				"-method", "GET",
-				"-timeout", "5s",
-				"-n", "invalid",
-				"-c", "50",
-				"-token", "secret-token",
-				"-body", `{"name": "test"}`,
+				"-url", "http://www.example.com",
+				"-n", "invalidRequests",
 			},
 			wantErrContains: "flag -n",
+		},
+		{
+			name: "invalid timeout value",
+			args: []string{
+				"-url", "http://www.example.com",
+				"-timeout", "invalidTimeout",
+			},
+			wantErrContains: "flag -timeout",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var stderr bytes.Buffer
 			_, err := parseConfig(tc.args, &stderr)
-			if tc.wantErrContains != "" {
-				if err == nil {
-					t.Fatalf("parseConfig() err = nil, want = %q", tc.wantErrContains)
-				}
-				if !strings.Contains(err.Error(), tc.wantErrContains) {
-					t.Errorf("parseConfig() err = %q, want = %q", err.Error(), tc.wantErrContains)
-				}
-				return
+			if err == nil {
+				t.Fatalf("parseConfig err = nil, want = %q", tc.wantErrContains)
+			}
+			if !strings.Contains(err.Error(), tc.wantErrContains) {
+				t.Errorf("parseConfig() err = %q, want = %q", err.Error(), tc.wantErrContains)
 			}
 		})
 	}
 }
 
+func TestMissingArgument(t *testing.T) {
+	tests := []parseConfigCase{
+		{
+			name: "missing URL argument",
+			args: []string{
+				"-url",
+			},
+			wantErrContains: "flag needs an argument: -url",
+		},
+		{
+			name: "missing concurrency argument",
+			args: []string{
+				"-url", "http://example.com",
+				"-c",
+			},
+			wantErrContains: "flag needs an argument: -c",
+		},
+		{
+			name: "missing requests argument",
+			args: []string{
+				"-url", "http://example.com",
+				"-n",
+			},
+			wantErrContains: "flag needs an argument: -n",
+		},
+		{
+			name: "missing method argument",
+			args: []string{
+				"-url", "http://example.com",
+				"-method",
+			},
+			wantErrContains: "flag needs an argument: -method",
+		},
+		{
+			name: "missing token argument",
+			args: []string{
+				"-url", "http://example.com",
+				"-token",
+			},
+			wantErrContains: "flag needs an argument: -token",
+		},
+		{
+			name: "missing body argument",
+			args: []string{
+				"-url", "http://example.com",
+				"-body",
+			},
+			wantErrContains: "flag needs an argument: -body",
+		},
+		{
+			name: "missing timeout argument",
+			args: []string{
+				"-url", "http://example.com",
+				"-timeout",
+			},
+			wantErrContains: "flag needs an argument: -timeout",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			_, err := parseConfig(tc.args, &stderr)
+			if err == nil {
+				t.Fatalf("parseConfig err = nil, want = %q", tc.wantErrContains)
+			}
+			if !strings.Contains(err.Error(), tc.wantErrContains) {
+				t.Errorf("parseConfig() err = %q, want = %q", err.Error(), tc.wantErrContains)
+			}
+		})
+	}
+}
+
+func TestUnknownFlag(t *testing.T) {
+	var stderr bytes.Buffer
+	wantErrContains := "not defined: -unknownFlag"
+	_, err := parseConfig([]string{"-unknownFlag", "value"}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), wantErrContains) {
+		t.Fatalf("parseConfig() err = %v, want to contain %q", err, wantErrContains)
+	}
+}
+
+// [should-fix] Despite its name, this test still contains no flag missing its value; most
+// cases merely omit an optional flag and duplicate the defaults contract. Keep missing URL
+// as its own required-flag case, and exercise a real malformed pair such as
+// `[]string{"-url", validURL, "-c"}` expecting "flag needs an argument: -c".
+func TestParseConfigDefaultValues(t *testing.T) {
+
+	test := parseConfigCase{
+		name: "default values",
+		args: []string{
+			"-url", "http://example.com",
+		},
+		want: loadtest.Config{
+			URL:         "http://example.com",
+			Concurrency: 10,
+			Requests:    20,
+			Timeout:     1 * time.Second,
+			Method:      http.MethodGet,
+			Token:       "",
+			Body:        "",
+		},
+	}
+
+	var stderr bytes.Buffer
+	got, err := parseConfig(test.args, &stderr)
+	if test.wantErrContains != "" {
+		if err == nil {
+			t.Fatalf("parseConfig err = nil, want = %q", test.wantErrContains)
+		}
+		if !strings.Contains(err.Error(), test.wantErrContains) {
+			t.Errorf("parseConfig() err = %q, want = %q", err.Error(), test.wantErrContains)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("parseConfig() unexpected error = %v", err)
+	}
+	if test.want != got {
+		t.Errorf("parseConfig() got = %v, want = %v", got, test.want)
+	}
+}
+
+// [should-fix] `render` promises to return and wrap writer failures, but no test protects
+// that contract. Pass a small test writer whose Write returns a sentinel error, then assert
+// `errors.Is(renderErr, sentinel)`; otherwise a future swallowed output error goes unnoticed.
 func TestRenderSummary(t *testing.T) {
 	summary := loadtest.Summary{
 		Total:      10,
@@ -247,6 +234,38 @@ func TestRenderSummary(t *testing.T) {
 
 	if got := output.String(); got != want {
 		t.Errorf("render() output:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestParseConfigAllValues(t *testing.T) {
+	test := parseConfigCase{
+		name: "all value supplied",
+		args: []string{
+			"-url", "http://example.com",
+			"-c", "12",
+			"-n", "250",
+			"-method", "POST",
+			"-token", "token",
+			"-body", `{"body": "some body"}`,
+			"-timeout", "500ms",
+		},
+		want: loadtest.Config{
+			URL:         "http://example.com",
+			Concurrency: 12,
+			Requests:    250,
+			Method:      http.MethodPost,
+			Token:       "token",
+			Body:        `{"body": "some body"}`,
+			Timeout:     500 * time.Millisecond,
+		},
+	}
+	var stderr bytes.Buffer
+	got, err := parseConfig(test.args, &stderr)
+	if err != nil {
+		t.Fatalf("parseConfig err = %q, want = nil", err)
+	}
+	if test.want != got {
+		t.Errorf("parseConfig() got = %v, want = %v", got, test.want)
 	}
 }
 
@@ -320,5 +339,26 @@ func TestRenderSummaryErrorsSorted(t *testing.T) {
 
 	if got := output.String(); got != want {
 		t.Errorf("render() output:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestWriteFailure(t *testing.T) {
+	summary := loadtest.Summary{
+		Total:      10,
+		Succeeded:  8,
+		Failed:     2,
+		Elapsed:    2 * time.Second,
+		Throughput: 4,
+		P50:        10 * time.Millisecond,
+		P90:        20 * time.Millisecond,
+		P99:        30 * time.Millisecond,
+	}
+
+	err := render(failingWriter{}, summary)
+	if err == nil {
+		t.Fatalf("render() error = nil, want %s", errWrite.Error())
+	}
+	if !errors.Is(err, errWrite) {
+		t.Errorf("render() err = %s, want = %s", err.Error(), errWrite.Error())
 	}
 }

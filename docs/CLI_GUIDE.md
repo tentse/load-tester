@@ -65,8 +65,8 @@ before `main` calls `os.Exit`.
 
 ## 3. Parsing flags — and why not the global `flag` set
 
-The spec's flags: `-url` (required), `-c` (10), `-n` (100), `-method` (GET), `-token` (""),
-`-body` (""), `-timeout` (30s).
+The spec's flags: `-url` (required), `-c` (10), `-n` (20), `-method` (GET), `-token` (""),
+`-body` (""), `-timeout` (1s).
 
 Two idioms matter here:
 

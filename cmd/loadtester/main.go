@@ -17,13 +17,19 @@ type errorCount struct {
 	count   int
 }
 
+// [blocker] This `main` package still has no `func main()`, so `go build ./cmd/loadtester`
+// fails with "function main is undeclared." Keep main tiny, but v0.1 cannot ship until the
+// testable `run(args, stdout, stderr) int` pipeline exists and main delegates to it.
 func parseConfig(args []string, stderr io.Writer) (loadtest.Config, error) {
 	fs := flag.NewFlagSet("loadtester", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
+	// [should-fix] These defaults contradict the documented CLI contract: c=10, n=100,
+	// timeout=30s. The defaults test currently locks in 1/1/1s, so implementation and test
+	// agree with each other while both disagree with the user-facing specification.
 	targetURL := fs.String("url", "", "target URL (required)")
-	concurrency := fs.Int("c", 1, "number of concurrent worker")
-	requests := fs.Int("n", 1, "total number of requests")
+	concurrency := fs.Int("c", 10, "number of concurrent worker")
+	requests := fs.Int("n", 20, "total number of requests")
 	method := fs.String("method", http.MethodGet, "HTTP method")
 	token := fs.String("token", "", "bearer token")
 	body := fs.String("body", "", "JSON request body")
