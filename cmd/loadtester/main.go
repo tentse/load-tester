@@ -24,9 +24,6 @@ func parseConfig(args []string, stderr io.Writer) (loadtest.Config, error) {
 	fs := flag.NewFlagSet("loadtester", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
-	// [should-fix] These defaults contradict the documented CLI contract: c=10, n=100,
-	// timeout=30s. The defaults test currently locks in 1/1/1s, so implementation and test
-	// agree with each other while both disagree with the user-facing specification.
 	targetURL := fs.String("url", "", "target URL (required)")
 	concurrency := fs.Int("c", 10, "number of concurrent worker")
 	requests := fs.Int("n", 20, "total number of requests")

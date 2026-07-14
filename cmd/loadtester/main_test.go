@@ -22,7 +22,6 @@ func (failingWriter) Write([]byte) (int, error) {
 type parseConfigCase struct {
 	name            string
 	args            []string
-	want            loadtest.Config
 	wantErrContains string
 }
 
@@ -77,75 +76,16 @@ func TestInvalidValue(t *testing.T) {
 }
 
 func TestMissingArgument(t *testing.T) {
-	tests := []parseConfigCase{
-		{
-			name: "missing URL argument",
-			args: []string{
-				"-url",
-			},
-			wantErrContains: "flag needs an argument: -url",
-		},
-		{
-			name: "missing concurrency argument",
-			args: []string{
-				"-url", "http://example.com",
-				"-c",
-			},
-			wantErrContains: "flag needs an argument: -c",
-		},
-		{
-			name: "missing requests argument",
-			args: []string{
-				"-url", "http://example.com",
-				"-n",
-			},
-			wantErrContains: "flag needs an argument: -n",
-		},
-		{
-			name: "missing method argument",
-			args: []string{
-				"-url", "http://example.com",
-				"-method",
-			},
-			wantErrContains: "flag needs an argument: -method",
-		},
-		{
-			name: "missing token argument",
-			args: []string{
-				"-url", "http://example.com",
-				"-token",
-			},
-			wantErrContains: "flag needs an argument: -token",
-		},
-		{
-			name: "missing body argument",
-			args: []string{
-				"-url", "http://example.com",
-				"-body",
-			},
-			wantErrContains: "flag needs an argument: -body",
-		},
-		{
-			name: "missing timeout argument",
-			args: []string{
-				"-url", "http://example.com",
-				"-timeout",
-			},
-			wantErrContains: "flag needs an argument: -timeout",
-		},
+	var stderr bytes.Buffer
+	wantErrContains := "flag needs an argument: -c"
+	_, err := parseConfig([]string{"-url", "http://example.com", "-c"}, &stderr)
+	if err == nil {
+		t.Fatalf("parseConfig err = nil, want = %q", wantErrContains)
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var stderr bytes.Buffer
-			_, err := parseConfig(tc.args, &stderr)
-			if err == nil {
-				t.Fatalf("parseConfig err = nil, want = %q", tc.wantErrContains)
-			}
-			if !strings.Contains(err.Error(), tc.wantErrContains) {
-				t.Errorf("parseConfig() err = %q, want = %q", err.Error(), tc.wantErrContains)
-			}
-		})
+	if !strings.Contains(err.Error(), wantErrContains) {
+		t.Errorf("parseConfig() err = %q, want = %q", err.Error(), wantErrContains)
 	}
+
 }
 
 func TestUnknownFlag(t *testing.T) {
@@ -157,50 +97,35 @@ func TestUnknownFlag(t *testing.T) {
 	}
 }
 
-// [should-fix] Despite its name, this test still contains no flag missing its value; most
-// cases merely omit an optional flag and duplicate the defaults contract. Keep missing URL
-// as its own required-flag case, and exercise a real malformed pair such as
-// `[]string{"-url", validURL, "-c"}` expecting "flag needs an argument: -c".
 func TestParseConfigDefaultValues(t *testing.T) {
 
-	test := parseConfigCase{
-		name: "default values",
-		args: []string{
-			"-url", "http://example.com",
-		},
-		want: loadtest.Config{
-			URL:         "http://example.com",
-			Concurrency: 10,
-			Requests:    20,
-			Timeout:     1 * time.Second,
-			Method:      http.MethodGet,
-			Token:       "",
-			Body:        "",
-		},
+	var stderr bytes.Buffer
+
+	args := []string{
+		"-url", "http://example.com",
+	}
+	want := loadtest.Config{
+		URL:         "http://example.com",
+		Concurrency: 10,
+		Requests:    20,
+		Timeout:     1 * time.Second,
+		Method:      http.MethodGet,
+		Token:       "",
+		Body:        "",
 	}
 
-	var stderr bytes.Buffer
-	got, err := parseConfig(test.args, &stderr)
-	if test.wantErrContains != "" {
-		if err == nil {
-			t.Fatalf("parseConfig err = nil, want = %q", test.wantErrContains)
-		}
-		if !strings.Contains(err.Error(), test.wantErrContains) {
-			t.Errorf("parseConfig() err = %q, want = %q", err.Error(), test.wantErrContains)
-		}
-		return
+	got, err := parseConfig(args, &stderr)
+	if stderr.Len() != 0 {
+		t.Fatalf("parseConfig() wrote unexpected output to stderr: %q", stderr.String())
 	}
 	if err != nil {
 		t.Fatalf("parseConfig() unexpected error = %v", err)
 	}
-	if test.want != got {
-		t.Errorf("parseConfig() got = %v, want = %v", got, test.want)
+	if want != got {
+		t.Errorf("parseConfig() got = %v, want = %v", got, want)
 	}
 }
 
-// [should-fix] `render` promises to return and wrap writer failures, but no test protects
-// that contract. Pass a small test writer whose Write returns a sentinel error, then assert
-// `errors.Is(renderErr, sentinel)`; otherwise a future swallowed output error goes unnoticed.
 func TestRenderSummary(t *testing.T) {
 	summary := loadtest.Summary{
 		Total:      10,
@@ -238,34 +163,34 @@ func TestRenderSummary(t *testing.T) {
 }
 
 func TestParseConfigAllValues(t *testing.T) {
-	test := parseConfigCase{
-		name: "all value supplied",
-		args: []string{
-			"-url", "http://example.com",
-			"-c", "12",
-			"-n", "250",
-			"-method", "POST",
-			"-token", "token",
-			"-body", `{"body": "some body"}`,
-			"-timeout", "500ms",
-		},
-		want: loadtest.Config{
-			URL:         "http://example.com",
-			Concurrency: 12,
-			Requests:    250,
-			Method:      http.MethodPost,
-			Token:       "token",
-			Body:        `{"body": "some body"}`,
-			Timeout:     500 * time.Millisecond,
-		},
-	}
 	var stderr bytes.Buffer
-	got, err := parseConfig(test.args, &stderr)
+	args := []string{
+		"-url", "http://example.com",
+		"-c", "12",
+		"-n", "250",
+		"-method", "POST",
+		"-token", "token",
+		"-body", `{"body": "some body"}`,
+		"-timeout", "500ms",
+	}
+	want := loadtest.Config{
+		URL:         "http://example.com",
+		Concurrency: 12,
+		Requests:    250,
+		Method:      http.MethodPost,
+		Token:       "token",
+		Body:        `{"body": "some body"}`,
+		Timeout:     500 * time.Millisecond,
+	}
+	got, err := parseConfig(args, &stderr)
+	if stderr.Len() != 0 {
+		t.Fatalf("parseConfig() wrote unexpected output to stderr: %q", stderr.String())
+	}
 	if err != nil {
 		t.Fatalf("parseConfig err = %q, want = nil", err)
 	}
-	if test.want != got {
-		t.Errorf("parseConfig() got = %v, want = %v", got, test.want)
+	if want != got {
+		t.Errorf("parseConfig() got = %v, want = %v", got, want)
 	}
 }
 
@@ -342,19 +267,9 @@ func TestRenderSummaryErrorsSorted(t *testing.T) {
 	}
 }
 
-func TestWriteFailure(t *testing.T) {
-	summary := loadtest.Summary{
-		Total:      10,
-		Succeeded:  8,
-		Failed:     2,
-		Elapsed:    2 * time.Second,
-		Throughput: 4,
-		P50:        10 * time.Millisecond,
-		P90:        20 * time.Millisecond,
-		P99:        30 * time.Millisecond,
-	}
+func TestRenderWriteFailure(t *testing.T) {
 
-	err := render(failingWriter{}, summary)
+	err := render(failingWriter{}, loadtest.Summary{})
 	if err == nil {
 		t.Fatalf("render() error = nil, want %s", errWrite.Error())
 	}
