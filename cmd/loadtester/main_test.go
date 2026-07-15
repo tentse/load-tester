@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -26,9 +27,8 @@ type parseConfigCase struct {
 }
 
 func TestMissingURL(t *testing.T) {
-	var stderr bytes.Buffer
 	wantErrContains := "-url is required"
-	_, err := parseConfig([]string{"-c", "10", "-n", "100"}, &stderr)
+	_, err := parseConfig([]string{"-c", "10", "-n", "100"})
 	if err == nil || !strings.Contains(err.Error(), wantErrContains) {
 		t.Fatalf("parseConfig() err = %v, want to contain %q", err, wantErrContains)
 	}
@@ -63,8 +63,7 @@ func TestInvalidValue(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			var stderr bytes.Buffer
-			_, err := parseConfig(tc.args, &stderr)
+			_, err := parseConfig(tc.args)
 			if err == nil {
 				t.Fatalf("parseConfig err = nil, want = %q", tc.wantErrContains)
 			}
@@ -76,9 +75,8 @@ func TestInvalidValue(t *testing.T) {
 }
 
 func TestMissingArgument(t *testing.T) {
-	var stderr bytes.Buffer
 	wantErrContains := "flag needs an argument: -c"
-	_, err := parseConfig([]string{"-url", "http://example.com", "-c"}, &stderr)
+	_, err := parseConfig([]string{"-url", "http://example.com", "-c"})
 	if err == nil {
 		t.Fatalf("parseConfig err = nil, want = %q", wantErrContains)
 	}
@@ -89,17 +87,14 @@ func TestMissingArgument(t *testing.T) {
 }
 
 func TestUnknownFlag(t *testing.T) {
-	var stderr bytes.Buffer
 	wantErrContains := "not defined: -unknownFlag"
-	_, err := parseConfig([]string{"-unknownFlag", "value"}, &stderr)
+	_, err := parseConfig([]string{"-unknownFlag", "value"})
 	if err == nil || !strings.Contains(err.Error(), wantErrContains) {
 		t.Fatalf("parseConfig() err = %v, want to contain %q", err, wantErrContains)
 	}
 }
 
 func TestParseConfigDefaultValues(t *testing.T) {
-
-	var stderr bytes.Buffer
 
 	args := []string{
 		"-url", "http://example.com",
@@ -114,10 +109,7 @@ func TestParseConfigDefaultValues(t *testing.T) {
 		Body:        "",
 	}
 
-	got, err := parseConfig(args, &stderr)
-	if stderr.Len() != 0 {
-		t.Fatalf("parseConfig() wrote unexpected output to stderr: %q", stderr.String())
-	}
+	got, err := parseConfig(args)
 	if err != nil {
 		t.Fatalf("parseConfig() unexpected error = %v", err)
 	}
@@ -163,7 +155,6 @@ func TestRenderSummary(t *testing.T) {
 }
 
 func TestParseConfigAllValues(t *testing.T) {
-	var stderr bytes.Buffer
 	args := []string{
 		"-url", "http://example.com",
 		"-c", "12",
@@ -182,10 +173,7 @@ func TestParseConfigAllValues(t *testing.T) {
 		Body:        `{"body": "some body"}`,
 		Timeout:     500 * time.Millisecond,
 	}
-	got, err := parseConfig(args, &stderr)
-	if stderr.Len() != 0 {
-		t.Fatalf("parseConfig() wrote unexpected output to stderr: %q", stderr.String())
-	}
+	got, err := parseConfig(args)
 	if err != nil {
 		t.Fatalf("parseConfig err = %q, want = nil", err)
 	}
@@ -275,5 +263,106 @@ func TestRenderWriteFailure(t *testing.T) {
 	}
 	if !errors.Is(err, errWrite) {
 		t.Errorf("render() err = %s, want = %s", err.Error(), errWrite.Error())
+	}
+}
+
+func TestRunSuccess(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockServer.Close()
+	var stdout, stderr bytes.Buffer
+
+	args := []string{
+		"-url", mockServer.URL,
+		"-c", "1",
+		"-n", "2",
+		"-method", http.MethodGet,
+		"-timeout", "1s",
+	}
+	got := run(args, &stdout, &stderr)
+	if got != 0 {
+		t.Fatalf("run() exit code = %d, want exit code = 0", got)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("run() error = %q, want = nil", stderr.String())
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"Load test summary\n",
+		"Total: 2\n",
+		"Succeeded: 2\n",
+		"Failed: 0\n",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("stdout = %q, want it contains %q", output, want)
+		}
+	}
+}
+
+// [blocker] Add a companion case whose stderr is failingWriter. It exposes the current
+// fallthrough bug: a parse failure plus a diagnostic-write failure continues through Run and
+// render and can return 0. The exit code must remain non-zero even when stderr is unavailable.
+func TestRunParseFailure(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	got := run([]string{}, &stdout, &stderr)
+	if got != 2 {
+		t.Fatalf("run() exit code = %d, want exit code = 2", got)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("run() stdout = %q, want = nil", stdout.String())
+	}
+	if stderr.Len() == 0 {
+		t.Fatalf("run() error empty")
+	}
+
+	errContains := "-url is required"
+	err := stderr.String()
+	if !strings.Contains(err, errContains) {
+		t.Errorf("run() err = %q, want = %q", err, errContains)
+	}
+}
+
+func TestRunLoadtestError(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	got := run([]string{"-url", "http://example.com", "-c", "0"}, &stdout, &stderr)
+	if got != 1 {
+		t.Fatalf("run() exit code = %d, want exit code = 1", got)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("run() stdout = %q, want = nil", stdout.String())
+	}
+	if stderr.Len() == 0 {
+		t.Fatal("run() stderr empty")
+	}
+
+	errContains := "loadtest.Run() error: \ninvalid concurrency"
+	err := stderr.String()
+	if !strings.Contains(err, errContains) {
+		t.Errorf("run() err = %q, want = %q", err, errContains)
+	}
+}
+
+func TestRunStdoutWriteFail(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockServer.Close()
+	var stderr bytes.Buffer
+	got := run([]string{"-url", mockServer.URL}, failingWriter{}, &stderr)
+
+	if got != 1 {
+		t.Fatalf("run() exit code = %d, want exit code = 1", got)
+	}
+	if stderr.Len() == 0 {
+		t.Fatalf("run() stderr empty")
+	}
+
+	errContains := "stdout write error"
+	err := stderr.String()
+	if !strings.Contains(err, errContains) {
+		t.Errorf("run() err = %q, want = %q", err, errContains)
 	}
 }
