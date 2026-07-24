@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -280,7 +281,7 @@ func TestRunSuccess(t *testing.T) {
 		"-method", http.MethodGet,
 		"-timeout", "1s",
 	}
-	got := run(args, &stdout, &stderr)
+	got := run(t.Context(), args, &stdout, &stderr)
 	if got != 0 {
 		t.Fatalf("run() exit code = %d, want exit code = 0", got)
 	}
@@ -301,13 +302,10 @@ func TestRunSuccess(t *testing.T) {
 	}
 }
 
-// [blocker] Add a companion case whose stderr is failingWriter. It exposes the current
-// fallthrough bug: a parse failure plus a diagnostic-write failure continues through Run and
-// render and can return 0. The exit code must remain non-zero even when stderr is unavailable.
 func TestRunParseFailure(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	got := run([]string{}, &stdout, &stderr)
+	got := run(t.Context(), []string{}, &stdout, &stderr)
 	if got != 2 {
 		t.Fatalf("run() exit code = %d, want exit code = 2", got)
 	}
@@ -325,9 +323,36 @@ func TestRunParseFailure(t *testing.T) {
 	}
 }
 
+func TestRunParseFailureWithStderrWriteFailure(t *testing.T) {
+	var stdout bytes.Buffer
+
+	got := run(t.Context(), []string{}, &stdout, failingWriter{})
+
+	if got != 2 {
+		t.Fatalf("run() got = %d, want = 2", got)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("run() stdout = %q, want = nil", stdout.String())
+	}
+
+}
+
+func TestRunRenderFailureWithStderrWriteFailure(t *testing.T) {
+	var stderr bytes.Buffer
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	got := run(t.Context(), []string{"-url", mockServer.URL}, failingWriter{}, &stderr)
+
+	if got != 1 {
+		t.Fatalf("run() got = %d, want = 1", got)
+	}
+
+}
+
 func TestRunLoadtestError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	got := run([]string{"-url", "http://example.com", "-c", "0"}, &stdout, &stderr)
+	got := run(t.Context(), []string{"-url", "http://example.com", "-c", "0"}, &stdout, &stderr)
 	if got != 1 {
 		t.Fatalf("run() exit code = %d, want exit code = 1", got)
 	}
@@ -351,7 +376,7 @@ func TestRunStdoutWriteFail(t *testing.T) {
 	}))
 	defer mockServer.Close()
 	var stderr bytes.Buffer
-	got := run([]string{"-url", mockServer.URL}, failingWriter{}, &stderr)
+	got := run(t.Context(), []string{"-url", mockServer.URL}, failingWriter{}, &stderr)
 
 	if got != 1 {
 		t.Fatalf("run() exit code = %d, want exit code = 1", got)
@@ -364,5 +389,147 @@ func TestRunStdoutWriteFail(t *testing.T) {
 	err := stderr.String()
 	if !strings.Contains(err, errContains) {
 		t.Errorf("run() err = %q, want = %q", err, errContains)
+	}
+}
+
+func TestRunContextCancellation(t *testing.T) {
+	started := make(chan struct{}, 1)
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer mockServer.Close()
+
+	var stdout, stderr bytes.Buffer
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	result := make(chan int, 1)
+	go func() {
+		result <- run(ctx, []string{"-url", mockServer.URL, "-c", "1", "-n", "1"}, &stdout, &stderr)
+	}()
+
+	select {
+	case <-started:
+		cancel()
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not start")
+	}
+
+	select {
+	case got := <-result:
+		if got != 130 {
+			t.Fatalf("error code = %d, expected error code = 130", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("run() took more than 2 seconds")
+	}
+
+	if !strings.Contains(stderr.String(), "load test canceled") {
+		t.Errorf("stderr = %q, want cancellation message", stderr.String())
+	}
+
+	if stdout.Len() == 0 {
+		t.Fatal("run() context cancellation summary = nil")
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"Load test summary\n",
+		"Total: 1\n",
+		"Succeeded: 0\n",
+		"Failed: 1\n",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("stdout = %q, want it contains %q", output, want)
+		}
+	}
+}
+
+func TestRunContextCancellationStderrWriteFailure(t *testing.T) {
+	started := make(chan struct{}, 1)
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer mockServer.Close()
+
+	var stdout bytes.Buffer
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	result := make(chan int, 1)
+	go func() {
+		result <- run(ctx, []string{"-url", mockServer.URL, "-c", "1", "-n", "1"}, &stdout, failingWriter{})
+	}()
+
+	select {
+	case <-started:
+		cancel()
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not start")
+	}
+
+	select {
+	case got := <-result:
+		if got != 130 {
+			t.Fatalf("error code = %d, expected error code = 130", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("run() took more than 2 seconds")
+	}
+
+	if stdout.Len() == 0 {
+		t.Fatal("run() context cancellation summary = nil")
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"Load test summary\n",
+		"Total: 1\n",
+		"Succeeded: 0\n",
+		"Failed: 1\n",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("stdout = %q, want it contains %q", output, want)
+		}
+	}
+}
+
+func TestRunContextCancellationStdoutWriteFailure(t *testing.T) {
+	started := make(chan struct{}, 1)
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer mockServer.Close()
+
+	var stderr bytes.Buffer
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	result := make(chan int, 1)
+	go func() {
+		result <- run(ctx, []string{"-url", mockServer.URL, "-c", "1", "-n", "1"}, failingWriter{}, &stderr)
+	}()
+
+	select {
+	case <-started:
+		cancel()
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not start")
+	}
+
+	select {
+	case got := <-result:
+		if got != 130 {
+			t.Fatalf("error code = %d, expected error code = 130", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("run() took more than 2 seconds")
+	}
+
+	if !strings.Contains(stderr.String(), "load test canceled") {
+		t.Errorf("stderr = %q, want cancellation message", stderr.String())
 	}
 }
