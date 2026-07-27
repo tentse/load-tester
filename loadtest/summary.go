@@ -49,7 +49,21 @@ func summarize(results []result, elapsed time.Duration) Summary {
 
 	var durations []time.Duration
 	for _, res := range results {
+		// [nit] Three mutually exclusive branches classifying one value read better as a
+		// tagless `switch { case ...: }` — gocritic's ifElseChain flags this exact shape, and
+		// a switch also makes it obvious where a fourth outcome would slot in.
 		if res.err != nil {
+			// [should-fix] (FEEDBACK.md #3, still open) Keying on the full error string means
+			// this map doesn't group, it fragments. Go network errors embed the client's local
+			// ephemeral port, so "the same failure" renders differently on every occurrence:
+			// STRESS_TEST_REPORT.md §6 measured 5000 connection resets producing 5000 distinct
+			// keys. That's a second unbounded memory sink on top of run.go's slice, and it
+			// destroys the feature — nobody learns anything from 5000 near-identical rows. The
+			// idiom is to classify *before* you count: errors.As into net.Error (check
+			// Timeout()) and *net.OpError (its .Op is "dial"/"read"/"write"), errors.Is against
+			// context.DeadlineExceeded and syscall.ECONNREFUSED, then map each to a small,
+			// stable label. The rendered message is for humans; the error's *kind* is for
+			// counting. Bounded map, readable output.
 			summary.Errors[res.err.Error()]++
 			summary.Failed++
 		} else if isServerError(res.status) {

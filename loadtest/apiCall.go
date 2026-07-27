@@ -9,7 +9,23 @@ import (
 	"time"
 )
 
+// [should-fix] The loadtest package has no package comment anywhere, even though keeping this
+// API importable (rather than burying it under internal/) is an explicit goal in AGENTS.md.
+// pkg.go.dev and `go doc` currently show a bare package name and nothing else — the first
+// thing a prospective user of your library sees is blank. Convention: one file owns it (often
+// a small doc.go), full sentences, starting "Package loadtest ...". revive's package-comments
+// rule flags this.
+//
+// [nit] (FEEDBACK.md #13) The filename apiCall.go is camelCase; Go filenames are conventionally
+// all-lowercase — client.go, request.go, apicall.go. Purely cosmetic, but it's the first thing
+// a Go reviewer's eye snags on in a package that is otherwise idiomatic.
+
 const (
+	// [nit] defaultTimeout is now referenced only from tests — no production path uses it,
+	// because Run always passes config.Timeout through — while cmd/loadtester hardcodes its
+	// own separate `1*time.Second` flag default. That's two sources of truth for one number,
+	// and they will drift the first time you change one. Either export it so the CLI can use
+	// it as its flag default, or move it into the test file where it's actually used.
 	defaultTimeout      = 1 * time.Second
 	maxIdleConns        = 100
 	maxIdleConnsPerHost = 100
@@ -31,6 +47,11 @@ func newRunner(timeout time.Duration) *runner {
 }
 
 func newClient(timeout time.Duration) *http.Client {
+	// [nit] (FEEDBACK.md #10) Unchecked type assertion. http.DefaultTransport is a package-level
+	// variable of interface type, and plenty of libraries reassign it (tracing wrappers, test
+	// doubles, VCR-style recorders). If anything in the process ever does, this line panics —
+	// and AGENTS.md says library code must never panic. The comma-ok form lets you fall back to
+	// a fresh &http.Transport{} instead of taking the program down.
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.MaxIdleConns = maxIdleConns
 	t.MaxIdleConnsPerHost = maxIdleConnsPerHost

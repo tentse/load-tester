@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,11 @@ import (
 
 	"github.com/tentse/load-tester/loadtest"
 )
+
+// [nit] No TestMain with goleak.VerifyTestMain in this package, even though these tests drive
+// the same concurrent engine that loadtest guards with it (loadtest/run_test.go:15). The CLI
+// is the layer where a stranded goroutine would actually reach a user, and the dependency is
+// already in go.mod. Four lines for real coverage of the thing this project is about.
 
 var errWrite = errors.New("deliberate write failure")
 
@@ -29,8 +35,9 @@ type parseConfigCase struct {
 
 func TestMissingURL(t *testing.T) {
 	wantErrContains := "-url is required"
-	_, err := parseConfig([]string{"-c", "10", "-n", "100"})
-	if err == nil || !strings.Contains(err.Error(), wantErrContains) {
+	var stderr bytes.Buffer
+	parseConfig([]string{"-c", "10", "-n", "100"}, &stderr)
+	if err := stderr.String(); !strings.Contains(err, wantErrContains) {
 		t.Fatalf("parseConfig() err = %v, want to contain %q", err, wantErrContains)
 	}
 }
@@ -64,12 +71,10 @@ func TestInvalidValue(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := parseConfig(tc.args)
-			if err == nil {
-				t.Fatalf("parseConfig err = nil, want = %q", tc.wantErrContains)
-			}
-			if !strings.Contains(err.Error(), tc.wantErrContains) {
-				t.Errorf("parseConfig() err = %q, want = %q", err.Error(), tc.wantErrContains)
+			var stderr bytes.Buffer
+			parseConfig(tc.args, &stderr)
+			if err := stderr.String(); !strings.Contains(err, tc.wantErrContains) {
+				t.Errorf("parseConfig() err = %q, want = %q", err, tc.wantErrContains)
 			}
 		})
 	}
@@ -77,20 +82,19 @@ func TestInvalidValue(t *testing.T) {
 
 func TestMissingArgument(t *testing.T) {
 	wantErrContains := "flag needs an argument: -c"
-	_, err := parseConfig([]string{"-url", "http://example.com", "-c"})
-	if err == nil {
-		t.Fatalf("parseConfig err = nil, want = %q", wantErrContains)
-	}
-	if !strings.Contains(err.Error(), wantErrContains) {
-		t.Errorf("parseConfig() err = %q, want = %q", err.Error(), wantErrContains)
+	var stderr bytes.Buffer
+	parseConfig([]string{"-url", "http://example.com", "-c"}, &stderr)
+	if err := stderr.String(); !strings.Contains(err, wantErrContains) {
+		t.Errorf("parseConfig() err = %q, want = %q", err, wantErrContains)
 	}
 
 }
 
 func TestUnknownFlag(t *testing.T) {
 	wantErrContains := "not defined: -unknownFlag"
-	_, err := parseConfig([]string{"-unknownFlag", "value"})
-	if err == nil || !strings.Contains(err.Error(), wantErrContains) {
+	var stderr bytes.Buffer
+	parseConfig([]string{"-unknownFlag", "value"}, &stderr)
+	if err := stderr.String(); !strings.Contains(err, wantErrContains) {
 		t.Fatalf("parseConfig() err = %v, want to contain %q", err, wantErrContains)
 	}
 }
@@ -109,13 +113,25 @@ func TestParseConfigDefaultValues(t *testing.T) {
 		Token:       "",
 		Body:        "",
 	}
-
-	got, err := parseConfig(args)
+	var stderr bytes.Buffer
+	got, err := parseConfig(args, &stderr)
 	if err != nil {
 		t.Fatalf("parseConfig() unexpected error = %v", err)
 	}
 	if want != got {
 		t.Errorf("parseConfig() got = %v, want = %v", got, want)
+	}
+}
+
+func TestParseConfigHelpErr(t *testing.T) {
+	var stderr bytes.Buffer
+	_, err := parseConfig([]string{"-h"}, &stderr)
+
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Errorf("parseConfig() got error = %v, want flag.ErrHelp", err)
+	}
+	if !strings.Contains(stderr.String(), "permission") {
+		t.Errorf("usage output missing safety warning: %q", stderr.String())
 	}
 }
 
@@ -174,7 +190,8 @@ func TestParseConfigAllValues(t *testing.T) {
 		Body:        `{"body": "some body"}`,
 		Timeout:     500 * time.Millisecond,
 	}
-	got, err := parseConfig(args)
+	var stderr bytes.Buffer
+	got, err := parseConfig(args, &stderr)
 	if err != nil {
 		t.Fatalf("parseConfig err = %q, want = nil", err)
 	}
@@ -337,11 +354,26 @@ func TestRunParseFailureWithStderrWriteFailure(t *testing.T) {
 
 }
 
+// [should-fix] Three things wrong with this test.
+//
+//  1. The mockServer is never closed. Every other test in this file defers Close; this one
+//     doesn't, so the server and its goroutines outlive the test. This is exactly what a
+//     goleak TestMain would have caught for you.
+//  2. It's a duplicate of TestRunStdoutWriteFail: both pass failingWriter{} as stdout and a
+//     real buffer as stderr, and both assert exit code 1. A test earns its place only if it
+//     can fail for a reason no existing test can — this one can't.
+//  3. The name promises a stderr write failure and the body doesn't test one; stderr here is
+//     a perfectly healthy bytes.Buffer. A wrong name is worse than no test, because the next
+//     reader assumes the case is covered and stops looking.
+//
+// Either delete it, or make it test what it claims (failing writer on *both* streams) and
+// assert something the other test doesn't.
 func TestRunRenderFailureWithStderrWriteFailure(t *testing.T) {
 	var stderr bytes.Buffer
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
+	defer mockServer.Close()
 	got := run(t.Context(), []string{"-url", mockServer.URL}, failingWriter{}, &stderr)
 
 	if got != 1 {
@@ -529,7 +561,22 @@ func TestRunContextCancellationStdoutWriteFailure(t *testing.T) {
 		t.Fatal("run() took more than 2 seconds")
 	}
 
-	if !strings.Contains(stderr.String(), "load test canceled") {
-		t.Errorf("stderr = %q, want cancellation message", stderr.String())
+	if !strings.Contains(stderr.String(), errWrite.Error()) {
+		t.Errorf("stderr = %q, want = %q", stderr.String(), errWrite.Error())
+	}
+}
+
+func TestRunErrHelp(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	got := run(t.Context(), []string{"-h"}, &stdout, &stderr)
+
+	if got != 0 {
+		t.Errorf("got exit code = %d, want = 0", got)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("got stdout = %v, want = nil", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "permission") {
+		t.Fatalf("got stderr = %v, want contains = permission", stderr.String())
 	}
 }
