@@ -1,13 +1,22 @@
 # load-tester
 
-A small HTTP load tester written in Go. Point it at a URL, say how many requests to send and
-how many to run at once, and it reports throughput, latency percentiles (p50/p90/p99), and a
-breakdown of what failed.
+[![Go Reference](https://pkg.go.dev/badge/github.com/tentse/load-tester.svg)](https://pkg.go.dev/github.com/tentse/load-tester/loadtest)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/tentse/load-tester)](go.mod)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-It is also a library: the public API (`Config`, `Run`, `Summary`) lives in an importable
-`loadtest` package, so you can drive load tests from your own Go code, not just the terminal.
+A small HTTP load tester written in Go. Point it at a URL, tell it how many requests to send
+and how many to run at once, and it tells you how the target held up — throughput, latency
+percentiles, and a breakdown of whatever went wrong.
 
-Production code uses **only the Go standard library** by design.
+It's a library as well as a command. The public API (`Config`, `Run`, `Summary`) lives in an
+importable `loadtest` package, so you can drive load tests from your own Go code instead of
+shelling out to a binary.
+
+The production code uses **nothing but the Go standard library**. That's a deliberate
+constraint, not an accident — the whole point was to learn Go's concurrency model properly
+rather than lean on someone else's worker pool. It was built test-first, following
+[Learn Go with Tests](https://quii.gitbook.io/learn-go-with-tests/), with AI guiding the
+design and reviewing the code rather than writing it.
 
 > **⚠️ This tool generates real traffic.** Only point it at systems you own or have explicit
 > permission to test. Load testing someone else's server without permission is rude at best
@@ -142,6 +151,10 @@ Full API documentation:
 
 Honest about what v0.1.0 does not do yet. Each of these is planned work, not a mystery.
 
+- **Only bearer-token auth.** `-token` sends an `Authorization: Bearer …` header, and that's
+  the only header you can set. An API key that belongs in a custom header — `X-API-Key`,
+  `apikey`, and friends — can't be sent at all. If your API takes the key as a query
+  parameter you can put it in the `-url` and it'll work fine.
 - **A malformed URL is not rejected up front.** `-url nope` passes validation, every request
   then fails the same way, and the tool still exits `0`. Check the summary, not just `$?`,
   until this is fixed.
@@ -157,6 +170,9 @@ Honest about what v0.1.0 does not do yet. Each of these is planned work, not a m
 - **Workers are not capped at `-n`.** Passing `-c 500000 -n 5` creates far more goroutines
   than there is work for. Harmless, but wasteful.
 - **Single target only.** One URL, one method, one body per run.
+- **No redirect control.** Redirects are followed automatically, so a `301` never shows up in
+  your results — you get the status at the end of the chain, and the latency covers every hop.
+- **No fixed-duration runs.** You say how many requests to send, not how long to run for.
 
 ## Roadmap
 

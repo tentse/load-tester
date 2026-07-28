@@ -43,8 +43,19 @@ stay invisible until something goes looking for them. Please run it before openi
 are on the list to fix; please don't let them block your PR, but do keep your own changes
 clean.
 
-## Tests
+## Tests — please write them first
 
+This project is built test-first, following the rhythm in
+[Learn Go with Tests](https://quii.gitbook.io/learn-go-with-tests/): write a failing test,
+**watch it fail and check it fails for the reason you expect**, make it pass, then tidy up.
+
+That middle step is the one people skip, and it's the one that matters. A test you never saw
+fail is a test you have no evidence actually tests anything.
+
+Concretely, for a PR:
+
+- Start from the test. If you're fixing a bug, the test should fail on `main` and pass with
+  your change — say so in the PR description.
 - Table-driven where it fits.
 - HTTP is tested against `httptest.Server` — tests never touch the real network.
 - Coordinate concurrency tests with channels, not `time.Sleep`. `TestRunCancellation` in
