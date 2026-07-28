@@ -196,11 +196,11 @@ Planned standard-library flags:
 |---|---:|---|
 | `-url` | required | Target URL |
 | `-c` | `10` | Concurrent workers |
-| `-n` | `100` | Total requests |
+| `-n` | `20` | Total requests |
 | `-method` | `GET` | HTTP method |
 | `-token` | empty | Bearer token |
 | `-body` | empty | JSON request body |
-| `-timeout` | `30s` | Per-request client timeout |
+| `-timeout` | `1s` | Per-request client timeout |
 
 Rendering should accept an `io.Writer` so it can be tested with a buffer. Only `main` may
 print or exit. Usage/help must warn users to target only systems they own or have explicit

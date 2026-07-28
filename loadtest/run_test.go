@@ -3,6 +3,7 @@ package loadtest
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -240,6 +241,9 @@ func TestValidateConfig(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error for test %s, got response -> %+v", tc.name, got)
 			}
+			if !errors.Is(err, ErrInvalidConfig) {
+				t.Errorf("error = %v, want ErrInvalidConfig", err)
+			}
 			if !strings.Contains(err.Error(), tc.wantErrContains) {
 				t.Errorf("error = %q, want it to contain %q", err.Error(), tc.wantErrContains)
 			}
@@ -298,5 +302,54 @@ func TestRunCancellation(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("Run did not return promptly after cancellation")
+	}
+}
+
+func TestRunClosesIdleConnections(t *testing.T) {
+	idle := make(chan struct{}, 1)
+	closed := make(chan struct{}, 1)
+
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateIdle:
+			select {
+			case idle <- struct{}{}:
+			default:
+			}
+		case http.StateClosed:
+			select {
+			case closed <- struct{}{}:
+			default:
+			}
+		}
+	}
+
+	server.Start()
+	defer server.Close()
+
+	_, err := Run(t.Context(), Config{
+		URL:         server.URL,
+		Concurrency: 1,
+		Requests:    1,
+		Timeout:     defaultTimeout,
+		Method:      http.MethodGet,
+	})
+	if err != nil {
+		t.Fatalf("got err = %q, want = nil", err.Error())
+	}
+
+	select {
+	case <-idle:
+	case <-time.After(defaultTimeout):
+		t.Fatal("connection never became idle")
+	}
+	select {
+	case <-closed:
+	case <-time.After(defaultTimeout):
+		t.Fatal("run returned without closing the idle connection")
 	}
 }

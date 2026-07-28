@@ -2,6 +2,7 @@ package loadtest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -40,21 +41,25 @@ func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, job
 	}
 }
 
+// ErrInvalidConfig indicates that a Config failed validation.
+var ErrInvalidConfig = errors.New("invalid config")
+
 func validateConfig(cfg Config) error {
+
 	if cfg.URL == "" {
-		return fmt.Errorf("invalid url -> %v", cfg.URL)
+		return fmt.Errorf("%w: invalid url -> %v", ErrInvalidConfig, cfg.URL)
 	}
 	if cfg.Method == "" {
-		return fmt.Errorf("invalid method -> %v", cfg.Method)
+		return fmt.Errorf("%w: invalid method -> %v", ErrInvalidConfig, cfg.Method)
 	}
 	if cfg.Concurrency <= 0 {
-		return fmt.Errorf("invalid concurrency -> %d", cfg.Concurrency)
+		return fmt.Errorf("%w: invalid concurrency -> %d", ErrInvalidConfig, cfg.Concurrency)
 	}
 	if cfg.Requests <= 0 {
-		return fmt.Errorf("invalid requests -> %d", cfg.Requests)
+		return fmt.Errorf("%w: invalid requests -> %d", ErrInvalidConfig, cfg.Requests)
 	}
 	if cfg.Timeout <= 0 {
-		return fmt.Errorf("invalid timeout -> %v", cfg.Timeout)
+		return fmt.Errorf("%w: invalid timeout -> %v", ErrInvalidConfig, cfg.Timeout)
 	}
 	return nil
 }
@@ -75,7 +80,9 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 
 	jobs := make(chan struct{})
 	results := make(chan result)
+
 	r := newRunner(config.Timeout)
+	defer r.client.CloseIdleConnections()
 
 	elapsedStart := time.Now()
 
