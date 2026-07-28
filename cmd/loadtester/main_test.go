@@ -36,9 +36,12 @@ type parseConfigCase struct {
 func TestMissingURL(t *testing.T) {
 	wantErrContains := "-url is required"
 	var stderr bytes.Buffer
-	parseConfig([]string{"-c", "10", "-n", "100"}, &stderr)
-	if err := stderr.String(); !strings.Contains(err, wantErrContains) {
-		t.Fatalf("parseConfig() err = %v, want to contain %q", err, wantErrContains)
+	_, err := parseConfig([]string{"-c", "10", "-n", "100"}, &stderr)
+	if err == nil {
+		t.Fatal("expected parsing to fail due to missing url but got err = nil")
+	}
+	if got := stderr.String(); !strings.Contains(got, wantErrContains) {
+		t.Errorf("parseConfig() err = %v, want to contain %q", got, wantErrContains)
 	}
 }
 
@@ -72,9 +75,12 @@ func TestInvalidValue(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var stderr bytes.Buffer
-			parseConfig(tc.args, &stderr)
-			if err := stderr.String(); !strings.Contains(err, tc.wantErrContains) {
-				t.Errorf("parseConfig() err = %q, want = %q", err, tc.wantErrContains)
+			_, err := parseConfig(tc.args, &stderr)
+			if err == nil {
+				t.Fatalf("expected error = %q, got = nil", tc.wantErrContains)
+			}
+			if got := stderr.String(); !strings.Contains(got, tc.wantErrContains) {
+				t.Errorf("parseConfig() err = %q, want = %q", got, tc.wantErrContains)
 			}
 		})
 	}
@@ -83,9 +89,12 @@ func TestInvalidValue(t *testing.T) {
 func TestMissingArgument(t *testing.T) {
 	wantErrContains := "flag needs an argument: -c"
 	var stderr bytes.Buffer
-	parseConfig([]string{"-url", "http://example.com", "-c"}, &stderr)
-	if err := stderr.String(); !strings.Contains(err, wantErrContains) {
-		t.Errorf("parseConfig() err = %q, want = %q", err, wantErrContains)
+	_, err := parseConfig([]string{"-url", "http://example.com", "-c"}, &stderr)
+	if err == nil {
+		t.Fatalf("expected error = %q, got = nil", wantErrContains)
+	}
+	if got := stderr.String(); !strings.Contains(got, wantErrContains) {
+		t.Errorf("parseConfig() err = %q, want = %q", got, wantErrContains)
 	}
 
 }
@@ -93,9 +102,12 @@ func TestMissingArgument(t *testing.T) {
 func TestUnknownFlag(t *testing.T) {
 	wantErrContains := "not defined: -unknownFlag"
 	var stderr bytes.Buffer
-	parseConfig([]string{"-unknownFlag", "value"}, &stderr)
-	if err := stderr.String(); !strings.Contains(err, wantErrContains) {
-		t.Fatalf("parseConfig() err = %v, want to contain %q", err, wantErrContains)
+	_, err := parseConfig([]string{"-unknownFlag", "value"}, &stderr)
+	if err == nil {
+		t.Fatalf("expected error = %q, got = nil", wantErrContains)
+	}
+	if got := stderr.String(); !strings.Contains(got, wantErrContains) {
+		t.Fatalf("parseConfig() err = %v, want to contain %q", got, wantErrContains)
 	}
 }
 

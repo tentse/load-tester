@@ -102,6 +102,7 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 	// descriptors after it returns is leaking. `defer r.client.CloseIdleConnections()` is the
 	// whole fix. Principle: whoever creates a resource owns releasing it.
 	r := newRunner(config.Timeout)
+	defer r.client.CloseIdleConnections()
 
 	elapsedStart := time.Now()
 
