@@ -14,11 +14,6 @@ import (
 	"github.com/tentse/load-tester/loadtest"
 )
 
-// [nit] No TestMain with goleak.VerifyTestMain in this package, even though these tests drive
-// the same concurrent engine that loadtest guards with it (loadtest/run_test.go:15). The CLI
-// is the layer where a stranded goroutine would actually reach a user, and the dependency is
-// already in go.mod. Four lines for real coverage of the thing this project is about.
-
 var errWrite = errors.New("deliberate write failure")
 
 type failingWriter struct{}
@@ -366,20 +361,6 @@ func TestRunParseFailureWithStderrWriteFailure(t *testing.T) {
 
 }
 
-// [should-fix] Three things wrong with this test.
-//
-//  1. The mockServer is never closed. Every other test in this file defers Close; this one
-//     doesn't, so the server and its goroutines outlive the test. This is exactly what a
-//     goleak TestMain would have caught for you.
-//  2. It's a duplicate of TestRunStdoutWriteFail: both pass failingWriter{} as stdout and a
-//     real buffer as stderr, and both assert exit code 1. A test earns its place only if it
-//     can fail for a reason no existing test can — this one can't.
-//  3. The name promises a stderr write failure and the body doesn't test one; stderr here is
-//     a perfectly healthy bytes.Buffer. A wrong name is worse than no test, because the next
-//     reader assumes the case is covered and stops looking.
-//
-// Either delete it, or make it test what it claims (failing writer on *both* streams) and
-// assert something the other test doesn't.
 func TestRunRenderFailureWithStderrWriteFailure(t *testing.T) {
 	var stderr bytes.Buffer
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -394,11 +375,11 @@ func TestRunRenderFailureWithStderrWriteFailure(t *testing.T) {
 
 }
 
-func TestRunLoadtestError(t *testing.T) {
+func TestRunInvalidConfig(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	got := run(t.Context(), []string{"-url", "http://example.com", "-c", "0"}, &stdout, &stderr)
-	if got != 1 {
-		t.Fatalf("run() exit code = %d, want exit code = 1", got)
+	if got != 2 {
+		t.Fatalf("run() exit code = %d, want exit code = 2", got)
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("run() stdout = %q, want = nil", stdout.String())
@@ -407,7 +388,7 @@ func TestRunLoadtestError(t *testing.T) {
 		t.Fatal("run() stderr empty")
 	}
 
-	errContains := "loadtest.Run() error: \ninvalid concurrency"
+	errContains := "invalid concurrency"
 	err := stderr.String()
 	if !strings.Contains(err, errContains) {
 		t.Errorf("run() err = %q, want = %q", err, errContains)

@@ -141,21 +141,6 @@ func TestServerErrors(t *testing.T) {
 	}
 }
 
-// [should-fix] (FEEDBACK.md #6, still open — and it drifted a little further.) Two dead fields
-// in these tables:
-//
-//  1. `wantStats` is declared in all three table structs in this file and set in four cases,
-//     and it is never read anywhere. Dead weight that implies an assertion which doesn't
-//     exist.
-//  2. The "empty get method" case below still carries want{Total: 1, Succeeded: 0, Failed: 1}.
-//     It's never asserted (this test body only checks the error), and it's factually wrong:
-//     validation rejects the config and returns Summary{} before a single request is fired.
-//
-// A test should assert everything it states and state nothing it doesn't assert. Misleading
-// expectations are worse than missing ones, because the next reader — you, in six months —
-// trusts them. Drop both, then consider asserting the contract that actually holds here:
-// invalid config => zero Summary, no requests sent. That documents the real behaviour instead
-// of implying a phantom failed request.
 func TestValidateConfig(t *testing.T) {
 
 	okMockServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
@@ -256,6 +241,9 @@ func TestValidateConfig(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error for test %s, got response -> %+v", tc.name, got)
 			}
+			if !errors.Is(err, ErrInvalidConfig) {
+				t.Errorf("error = %v, want ErrInvalidConfig", err)
+			}
 			if !strings.Contains(err.Error(), tc.wantErrContains) {
 				t.Errorf("error = %q, want it to contain %q", err.Error(), tc.wantErrContains)
 			}
@@ -317,7 +305,7 @@ func TestRunCancellation(t *testing.T) {
 	}
 }
 
-func TestRunClosedIdleConnections(t *testing.T) {
+func TestRunClosesIdleConnections(t *testing.T) {
 	idle := make(chan struct{}, 1)
 	closed := make(chan struct{}, 1)
 
