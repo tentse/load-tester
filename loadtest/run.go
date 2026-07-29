@@ -47,19 +47,19 @@ var ErrInvalidConfig = errors.New("invalid config")
 func validateConfig(cfg Config) error {
 
 	if cfg.URL == "" {
-		return fmt.Errorf("%w: invalid url -> %v", ErrInvalidConfig, cfg.URL)
+		return fmt.Errorf("%w: invalid url: %v", ErrInvalidConfig, cfg.URL)
 	}
 	if cfg.Method == "" {
-		return fmt.Errorf("%w: invalid method -> %v", ErrInvalidConfig, cfg.Method)
+		return fmt.Errorf("%w: invalid method: %v", ErrInvalidConfig, cfg.Method)
 	}
 	if cfg.Concurrency <= 0 {
-		return fmt.Errorf("%w: invalid concurrency -> %d", ErrInvalidConfig, cfg.Concurrency)
+		return fmt.Errorf("%w: invalid concurrency: %d", ErrInvalidConfig, cfg.Concurrency)
 	}
 	if cfg.Requests <= 0 {
-		return fmt.Errorf("%w: invalid requests -> %d", ErrInvalidConfig, cfg.Requests)
+		return fmt.Errorf("%w: invalid requests: %d", ErrInvalidConfig, cfg.Requests)
 	}
 	if cfg.Timeout <= 0 {
-		return fmt.Errorf("%w: invalid timeout -> %v", ErrInvalidConfig, cfg.Timeout)
+		return fmt.Errorf("%w: invalid timeout: %v", ErrInvalidConfig, cfg.Timeout)
 	}
 	return nil
 }
