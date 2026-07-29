@@ -26,8 +26,8 @@ func parseConfig(args []string, stderr io.Writer) (loadtest.Config, error) {
 	fs.SetOutput(stderr)
 
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "loadtester: a small HTTP load tester\n")
-		fmt.Fprintf(fs.Output(), "WARNING: this tool generates load. Only point it at systems you own or have explicit permission to test.\n")
+		_, _ = fmt.Fprintf(fs.Output(), "loadtester: a small HTTP load tester\n")
+		_, _ = fmt.Fprintf(fs.Output(), "WARNING: this tool generates load. Only point it at systems you own or have explicit permission to test.\n")
 		fs.PrintDefaults()
 	}
 	targetURL := fs.String("url", "", "target URL (required)")
@@ -42,7 +42,7 @@ func parseConfig(args []string, stderr io.Writer) (loadtest.Config, error) {
 		return loadtest.Config{}, fmt.Errorf("parsing failed: %w", err)
 	}
 	if *targetURL == "" {
-		fmt.Fprint(fs.Output(), "parsing failed: -url is required\n")
+		_, _ = fmt.Fprint(fs.Output(), "parsing failed: -url is required\n")
 		fs.Usage()
 		return loadtest.Config{}, errors.New("-url is required")
 	}
@@ -142,9 +142,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		if errors.Is(err, context.Canceled) {
 			renderErr := render(stdout, summary)
 			if renderErr != nil {
-				fmt.Fprintf(stderr, "stdout write error: \n%v\n", renderErr)
+				_, _ = fmt.Fprintf(stderr, "stdout write error: \n%v\n", renderErr)
 			} else {
-				fmt.Fprintf(stderr, "load test canceled: %v\n", err.Error())
+				_, _ = fmt.Fprintf(stderr, "load test canceled: %v\n", err.Error())
 			}
 			return 130
 		}
