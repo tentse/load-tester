@@ -182,17 +182,81 @@ written up in [docs/MULTI_ENDPOINT_DESIGN.md](docs/MULTI_ENDPOINT_DESIGN.md).
 
 ## Development
 
+There is no build tooling beyond the Go toolchain itself — every command below is plain `go`,
+except the optional linter.
+
+### Build
+
+| Command | What it does |
+|---|---|
+| `go build ./...` | Compiles every package and reports type errors, without leaving a binary in your working tree. |
+| `go build -o loadtester ./cmd/loadtester` | Builds the CLI itself, so you can run it as `./loadtester`. |
+| `go install ./cmd/loadtester` | Installs `loadtester` into `$GOBIN` (usually `~/go/bin`) so it's on your `PATH`. |
+
+### Tests
+
+| Command | What it does |
+|---|---|
+| `go test ./...` | Runs the whole suite — the default check, and the one you'll run most often. |
+| `go test -v ./...` | The same run, but prints each test name and result; what you want when something fails. |
+| `go test -run TestRunCancellation ./loadtest/` | Runs a single test by name (the argument is a regex), for working on one behaviour at a time. |
+| `go test -race -count=1 ./...` | **The one that matters** — runs the suite under the race detector with caching disabled. |
+| `go test -cover ./...` | Runs the suite and prints a coverage percentage per package. |
+| `go test -count=5 ./...` | Runs the suite five times over, to shake out flakiness a single green run would hide. |
+
+`go test -race` earns its emphasis. This is a concurrency project, and data races stay completely
+invisible until something goes looking for them — a suite that passes without `-race` tells you
+very little. `-count=1` disables Go's test result cache, so you're testing your actual code
+rather than a cached result from an earlier run. Run this before every PR.
+
+Two things keep the suite trustworthy:
+
+- **Nothing touches the network.** HTTP is exercised against `httptest.Server`, so the tests are
+  fast, offline, and deterministic.
+- **Leaked goroutines fail the build.** `go.uber.org/goleak` is a test-only dependency that fails
+  the suite if a goroutine outlives the test that started it — precisely the failure mode a
+  worker-pool project is most likely to have.
+
+### Coverage
+
 ```sh
-go build ./...
-go test ./...
-go test -race -count=1 ./...    # the one that matters — this is a concurrency project
-go test -cover ./...
-go vet ./...
-golangci-lint run
+go test -cover ./...                        # quick per-package percentage
+go test -coverprofile=coverage.out ./...    # write a profile to disk
+go tool cover -func=coverage.out            # per-function breakdown, total on the last line
+go tool cover -html=coverage.out            # annotated view in your browser
 ```
 
-Tests use `httptest` servers and never touch the network. `go.uber.org/goleak` is a test-only
-dependency that fails the suite if a goroutine outlives it.
+`-coverprofile` writes a machine-readable profile; the two `go tool cover` commands render it.
+The `-html` view is the one worth reaching for — it colours covered lines green and uncovered
+lines red, which is how you catch a branch you only *thought* you'd tested.
+
+Current state: **`loadtest` is at 100%**, `cmd/loadtester` at 91.5%, **96.5% overall**. All the
+real logic lives in `loadtest`, and it's meant to stay at 100%.
+
+### Formatting and static analysis
+
+| Command | What it does |
+|---|---|
+| `gofmt -l .` | Lists files that aren't correctly formatted — silence means everything is fine. |
+| `gofmt -w .` | Rewrites those files in place, fixing the formatting for you. |
+| `go vet ./...` | Reports suspicious code that still compiles: bad `Printf` verbs, unused results, copied locks. |
+| `golangci-lint run` | Runs a bundle of third-party linters in one pass; the only tool here that isn't part of Go. |
+
+`gofmt` and `go vet` both ship with Go, and both are currently clean.
+
+`golangci-lint` is optional and installed separately (`brew install golangci-lint`, or see the
+[install docs](https://golangci-lint.run/welcome/install/)). It currently reports **4 `errcheck`
+findings**, all of them unchecked `fmt.Fprintf` writes to the CLI's own output stream in
+`cmd/loadtester/main.go`. They're known and on the list to fix — don't let them block your PR,
+but do keep your own changes clean.
+
+### Before opening a PR
+
+```sh
+gofmt -l .                      # must print nothing
+go vet ./...                    # must print nothing
+go test -race -count=1 ./...    # must pass
+```
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
