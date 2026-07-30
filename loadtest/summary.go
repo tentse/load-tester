@@ -1,10 +1,15 @@
 package loadtest
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -24,10 +29,17 @@ type result struct {
 //
 // A request succeeds when it completes without an error and its HTTP status is
 // less than 500. Request errors and statuses of 500 or greater are failures.
+//
 // Total counts completed request attempts, so it can be less than Config.Requests
 // after cancellation. Elapsed is the wall-clock run duration. Throughput is
-// successful requests per second, and P50, P90, and P99 are nearest-rank
-// successful-request latencies. Errors groups failure descriptions by occurrence.
+// successful requests per second. P50, P90, and P99 are nearest-rank latencies
+// calculated from successful requests only.
+//
+// Errors maps stable failure categories and HTTP server-error descriptions to
+// their occurrence counts. Request failures are classified as request timeout,
+// connection refused, connection reset, unexpected EOF, or request failed.
+// Raw transport error text, URL user information, and URL query values are not
+// included in these error keys.
 type Summary struct {
 	Total      int
 	Succeeded  int
@@ -40,6 +52,25 @@ type Summary struct {
 	Errors     map[string]int
 }
 
+func classifyFailure(err error) string {
+	var networkErr net.Error
+
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "request timeout"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "connection refused"
+	case errors.Is(err, syscall.ECONNRESET):
+		return "connection reset"
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		return "unexpected EOF"
+	case errors.As(err, &networkErr) && networkErr.Timeout():
+		return "request timeout"
+	default:
+		return "request failed"
+	}
+}
+
 func summarize(results []result, elapsed time.Duration) Summary {
 	summary := Summary{
 		Total:   len(results),
@@ -50,7 +81,7 @@ func summarize(results []result, elapsed time.Duration) Summary {
 	var durations []time.Duration
 	for _, res := range results {
 		if res.err != nil {
-			summary.Errors[res.err.Error()]++
+			summary.Errors[classifyFailure(res.err)]++
 			summary.Failed++
 		} else if isServerError(res.status) {
 			summary.Errors[statusErrText(res.status)]++

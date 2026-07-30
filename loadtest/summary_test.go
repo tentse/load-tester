@@ -1,12 +1,23 @@
 package loadtest
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"reflect"
+	"syscall"
 	"testing"
 	"time"
 )
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "network operation timed out" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return false }
 
 func TestSummary(t *testing.T) {
 
@@ -17,7 +28,7 @@ func TestSummary(t *testing.T) {
 		want    Summary
 	}{
 		{
-			name: "both succeeded and failed hit",
+			name: "all succeeded with one internal server error",
 			results: []result{
 				{
 					latency: 10 * time.Millisecond,
@@ -67,29 +78,18 @@ func TestSummary(t *testing.T) {
 					latency: 28 * time.Millisecond,
 					status:  http.StatusAccepted,
 				},
-				{
-					err: errors.New("connection refused"),
-				},
-				{
-					err: errors.New("connection refused"),
-				},
-				{
-					err: errors.New("timeout"),
-				},
 			},
 			elapsed: 4 * time.Second,
 			want: Summary{
-				Total:      15,
+				Total:      12,
 				Succeeded:  11,
-				Failed:     4,
+				Failed:     1,
 				Elapsed:    4 * time.Second,
 				Throughput: 2.75,
 				P50:        28 * time.Millisecond,
 				P90:        109 * time.Millisecond,
 				P99:        120 * time.Millisecond,
 				Errors: map[string]int{
-					"connection refused": 2,
-					"timeout":            1,
 					statusErrText(http.StatusInternalServerError): 1,
 				},
 			},
@@ -132,27 +132,31 @@ func TestSummary(t *testing.T) {
 					status:  http.StatusBadGateway,
 				},
 				{
-					err: errors.New("connection refused"),
+					err: context.DeadlineExceeded,
 				},
 				{
-					err: errors.New("timeout"),
+					err: syscall.ECONNREFUSED,
+				},
+				{
+					err: errors.New("some new error"),
 				},
 			},
 			elapsed: 2 * time.Second,
 			want: Summary{
-				Total:      4,
+				Total:      5,
 				Succeeded:  0,
-				Failed:     4,
+				Failed:     5,
 				Elapsed:    2 * time.Second,
 				Throughput: 0,
 				P50:        0,
 				P90:        0,
 				P99:        0,
 				Errors: map[string]int{
-					"connection refused": 1,
-					"timeout":            1,
+					"connection refused":                          1,
+					"request timeout":                             1,
 					statusErrText(http.StatusInternalServerError): 1,
 					statusErrText(http.StatusBadGateway):          1,
+					"request failed":                              1,
 				},
 			},
 		},
@@ -236,6 +240,90 @@ func TestSummary(t *testing.T) {
 			got := summarize(tc.results, tc.elapsed)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("summarize() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSummaryStandardErrorCategory(t *testing.T) {
+
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "deadline exceeded",
+			err:  context.DeadlineExceeded,
+			want: "request timeout",
+		},
+		{
+			name: "wrapped deadline exceeded",
+			err:  fmt.Errorf("send request: %w", context.DeadlineExceeded),
+			want: "request timeout",
+		},
+		{
+			name: "connection refused",
+			err:  syscall.ECONNREFUSED,
+			want: "connection refused",
+		},
+		{
+			name: "wrapped connection refused",
+			err:  fmt.Errorf("dial target: %w", syscall.ECONNREFUSED),
+			want: "connection refused",
+		},
+		{
+			name: "connection reset",
+			err:  syscall.ECONNRESET,
+			want: "connection reset",
+		},
+		{
+			name: "unexpected EOF",
+			err:  io.ErrUnexpectedEOF,
+			want: "unexpected EOF",
+		},
+		{
+			name: "plain EOF is not unexpected EOF",
+			err:  io.EOF,
+			want: "request failed",
+		},
+		{
+			name: "message text must not control classification",
+			err:  errors.New("connection refused"),
+			want: "request failed",
+		},
+		{
+			name: "unknown sensitive error",
+			err: errors.New(
+				"request https://user:password@example.com/users?token=secret failed",
+			),
+			want: "request failed",
+		},
+		{
+			name: "network timeout",
+			err:  timeoutError{},
+			want: "request timeout",
+		},
+		{
+			name: "wrapped network timeout",
+			err:  fmt.Errorf("send request: %w", timeoutError{}),
+			want: "request timeout",
+		},
+		{
+			name: "network timeout inside URL error",
+			err: &url.Error{
+				Op:  "Get",
+				URL: "https://user:password@example.com/users?token=secret",
+				Err: timeoutError{},
+			},
+			want: "request timeout",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyFailure(tc.err); got != tc.want {
+				t.Fatalf("classifyFailure() = %q, want = %q", got, tc.want)
 			}
 		})
 	}
