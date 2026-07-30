@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  COVERAGE_THRESHOLD: 80
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test (race detector + coverage)
+        run: go test ./... -race -covermode=atomic -coverprofile=coverage.out
+
+      - name: Enforce coverage threshold
+        run: |
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | tr -d '%')
+          echo "Total coverage: ${total}% (threshold ${COVERAGE_THRESHOLD}%)"
+          {
+            echo "### Coverage"
+            echo ""
+            echo "**${total}%** total — threshold ${COVERAGE_THRESHOLD}%"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if awk "BEGIN {exit !($total < $COVERAGE_THRESHOLD)}"; then
+            echo "::error::Coverage ${total}% is below the required ${COVERAGE_THRESHOLD}%"
+            exit 1
+          fi
+
+      - name: Upload coverage profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-profile
+          path: coverage.out
