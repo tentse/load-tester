@@ -29,14 +29,17 @@ type result struct {
 //
 // A request succeeds when it completes without an error and its HTTP status is
 // less than 500. Request errors and statuses of 500 or greater are failures.
+//
 // Total counts completed request attempts, so it can be less than Config.Requests
 // after cancellation. Elapsed is the wall-clock run duration. Throughput is
-// successful requests per second, and P50, P90, and P99 are nearest-rank
-// successful-request latencies. Errors groups failure descriptions by occurrence.
-// [should-fix] This public contract still describes arbitrary "failure descriptions", while
-// the implementation now exposes a fixed set of safe categories. Document those categories
-// here and in loadtest/doc.go and README.md; issue #2 also requires removing the two obsolete
-// known-limitations entries while retaining the separate command-line-secret warning.
+// successful requests per second. P50, P90, and P99 are nearest-rank latencies
+// calculated from successful requests only.
+//
+// Errors maps stable failure categories and HTTP server-error descriptions to
+// their occurrence counts. Request failures are classified as request timeout,
+// connection refused, connection reset, unexpected EOF, or request failed.
+// Raw transport error text, URL user information, and URL query values are not
+// included in these error keys.
 type Summary struct {
 	Total      int
 	Succeeded  int
@@ -49,14 +52,6 @@ type Summary struct {
 	Errors     map[string]int
 }
 
-// [blocker] Timeout classification is incomplete: many real HTTP timeouts are reported through
-// net.Error.Timeout() without wrapping context.DeadlineExceeded, so they currently fall through
-// to "request failed". Use errors.As to find a net.Error anywhere in the chain and classify it
-// when Timeout() is true; add both direct and *url.Error-wrapped timeout cases to the table.
-//
-// [should-fix] These strings are part of observable library/CLI output, but literals are repeated
-// across production and tests. An unexported failureKind type with named constants makes the
-// vocabulary explicit and prevents a typo in one branch from silently creating a new map key.
 func classifyFailure(err error) string {
 	var networkErr net.Error
 

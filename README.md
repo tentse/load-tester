@@ -95,7 +95,11 @@ request rate — throughput is whatever the target can absorb.
 - **P50 / P90 / P99** — nearest-rank percentiles over **successful requests only**, so a wave
   of fast connection refusals cannot flatter your latency numbers. Each measurement covers the
   full request including reading the response body.
-- **Errors** — failure messages grouped by how often they occurred, most frequent first.
+- **Errors** — safe, stable failure categories grouped by how often they occurred, most
+  frequent first. Request timeouts, connection refusals, connection resets, truncated
+  responses, and unknown request failures use fixed category names. URL user information and
+  query values are not included in these categories, and equivalent failures are grouped
+  together even when their underlying network errors contain different local ports.
 
 ## Exit codes
 
@@ -154,33 +158,14 @@ Honest about what v0.1.0 does not do yet. Each of these is planned work, not a m
 - **Only bearer-token auth.** `-token` sends an `Authorization: Bearer …` header, and that's
   the only header you can set. An API key that belongs in a custom header — `X-API-Key`,
   `apikey`, and friends — can't be sent at all. If your API takes the key as a query
-  parameter you can put it in the `-url` and it'll work — but read the next entry before you
-  do.
-- **Failure output repeats the full URL, query string and all.** Error lines are built from
-  the target URL, so any credential you passed as a query parameter is printed back to your
-  terminal verbatim — twice per line, in fact, because Go's own transport error carries the
-  URL as well:
-
-  ```
-  Errors:
-    do GET https://api.example.com/v1/users?api_key=SUPERSECRET: Get "https://api.example.com/v1/users?api_key=SUPERSECRET": dial tcp: connection refused: 2
-  ```
-
-  Nothing is redacted. A fully successful run prints no URL at all, so this surfaces *only*
-  when requests fail — which is exactly when you're most likely to paste the output into an
-  issue, a Slack thread, or a CI log. **Scrub the summary before sharing it**, and treat any
-  key that has appeared in output as needing rotation. The same applies to logs and terminal
-  scrollback you don't control.
+  parameter, you can include it in `-url`; failure summaries do not print query values.
+  The command-line exposure described below still applies.
 - **A malformed URL is not rejected up front.** `-url nope` passes validation, every request
   then fails the same way, and the tool still exits `0`. Check the summary, not just `$?`,
   until this is fixed.
 - **Memory grows with `-n`.** Every result is held until the run finishes, so a run of several
   million requests uses hundreds of MB. Fine for typical runs; plan around it for very large
   ones.
-- **Error grouping can fragment.** Failures are grouped by their message, and some network
-  errors embed the client's local port number. Connection refusals and timeouts group
-  correctly, but a server that *resets* connections can produce one line per failed request
-  instead of one line per cause.
 - **Secrets on the command line are visible** in your shell history and to anyone who can run
   `ps` while the test is running. This covers `-token`, and equally a key embedded in `-url`.
   Prefer a shell variable that you clear afterwards.
