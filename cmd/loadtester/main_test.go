@@ -326,6 +326,42 @@ func TestRunSuccess(t *testing.T) {
 	}
 }
 
+func TestRunSensitiveUrlContent(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	args := []string{
+		"-url", "http://api_key:actual_api_key",
+		"-c", "1",
+		"-n", "1",
+		"-method", http.MethodGet,
+		"-timeout", "1s",
+	}
+	got := run(t.Context(), args, &stdout, &stderr)
+	if got != 0 {
+		t.Errorf("run() exit code = %d, want 0", got)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("run() error = %q, want = nil", stderr.String())
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"Load test summary\n",
+		"Total: 1\n",
+		"Succeeded: 0\n",
+		"Failed: 1\n",
+		"Errors:\n  request failed: 1\n",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("stdout = %q, want it contains %q", output, want)
+		}
+	}
+
+	if terminalOutput := output + stderr.String(); strings.Contains(terminalOutput, "actual_api_key") {
+		t.Errorf("terminal output leaked sensitive detail: %q", terminalOutput)
+	}
+}
+
 func TestRunParseFailure(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 

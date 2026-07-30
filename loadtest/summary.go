@@ -1,10 +1,15 @@
 package loadtest
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -28,6 +33,10 @@ type result struct {
 // after cancellation. Elapsed is the wall-clock run duration. Throughput is
 // successful requests per second, and P50, P90, and P99 are nearest-rank
 // successful-request latencies. Errors groups failure descriptions by occurrence.
+// [should-fix] This public contract still describes arbitrary "failure descriptions", while
+// the implementation now exposes a fixed set of safe categories. Document those categories
+// here and in loadtest/doc.go and README.md; issue #2 also requires removing the two obsolete
+// known-limitations entries while retaining the separate command-line-secret warning.
 type Summary struct {
 	Total      int
 	Succeeded  int
@@ -40,6 +49,33 @@ type Summary struct {
 	Errors     map[string]int
 }
 
+// [blocker] Timeout classification is incomplete: many real HTTP timeouts are reported through
+// net.Error.Timeout() without wrapping context.DeadlineExceeded, so they currently fall through
+// to "request failed". Use errors.As to find a net.Error anywhere in the chain and classify it
+// when Timeout() is true; add both direct and *url.Error-wrapped timeout cases to the table.
+//
+// [should-fix] These strings are part of observable library/CLI output, but literals are repeated
+// across production and tests. An unexported failureKind type with named constants makes the
+// vocabulary explicit and prevents a typo in one branch from silently creating a new map key.
+func classifyFailure(err error) string {
+	var networkErr net.Error
+
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "request timeout"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "connection refused"
+	case errors.Is(err, syscall.ECONNRESET):
+		return "connection reset"
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		return "unexpected EOF"
+	case errors.As(err, &networkErr) && networkErr.Timeout():
+		return "request timeout"
+	default:
+		return "request failed"
+	}
+}
+
 func summarize(results []result, elapsed time.Duration) Summary {
 	summary := Summary{
 		Total:   len(results),
@@ -50,7 +86,7 @@ func summarize(results []result, elapsed time.Duration) Summary {
 	var durations []time.Duration
 	for _, res := range results {
 		if res.err != nil {
-			summary.Errors[res.err.Error()]++
+			summary.Errors[classifyFailure(res.err)]++
 			summary.Failed++
 		} else if isServerError(res.status) {
 			summary.Errors[statusErrText(res.status)]++
