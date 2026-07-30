@@ -245,11 +245,6 @@ func TestSummary(t *testing.T) {
 	}
 }
 
-// [should-fix] The issue requires deterministic synthetic chains, but this table only covers
-// direct errors and one fmt wrapper. Add *url.Error -> *net.OpError -> *os.SyscallError chains
-// for refusal/reset, a net.Error timeout, and a wrapped io.ErrUnexpectedEOF. Separately exercise
-// summarize with two reset chains whose local ports differ and assert one "connection reset" key
-// with count 2; that proves the low-cardinality behavior at the actual aggregation boundary.
 func TestSummaryStandardErrorCategory(t *testing.T) {
 
 	tests := []struct {
