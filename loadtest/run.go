@@ -24,7 +24,7 @@ type Config struct {
 	Body        string
 }
 
-func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, jobs <-chan struct{}, results chan<- result) {
+func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, jobs <-chan struct{}, latencies chan<- time.Duration, summary *Summary) {
 	defer wg.Done()
 	for {
 		select {
@@ -36,7 +36,17 @@ func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, job
 			}
 			start := time.Now()
 			status, err := r.hit(ctx, cfg.Method, cfg.URL, cfg.Token, cfg.Body)
-			results <- result{latency: time.Since(start), status: status, err: err}
+			summary.Total++
+			if err != nil {
+				summary.Failed++
+				summary.Errors[classifyFailure(err)]++
+			} else if isServerError(status) {
+				summary.Errors[statusErrText(status)]++
+			} else {
+				summary.Succeeded++
+				latencies <- time.Since(start)
+			}
+			// results <- result{latency: time.Since(start), status: status, err: err}
 		}
 	}
 }
@@ -79,7 +89,14 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 	}
 
 	jobs := make(chan struct{})
-	results := make(chan result)
+	latencies := make(chan time.Duration)
+
+	summary := Summary{
+		Total:     0,
+		Succeeded: 0,
+		Failed:    0,
+		Errors:    map[string]int{},
+	}
 
 	r := newRunner(config.Timeout)
 	defer r.client.CloseIdleConnections()
@@ -101,19 +118,19 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 	for i := 1; i <= config.Concurrency; i++ {
 		wg.Add(1)
 		go func() {
-			r.worker(ctx, &wg, config, jobs, results)
+			r.worker(ctx, &wg, config, jobs, latencies, &summary)
 		}()
 	}
 
 	go func() {
 		wg.Wait()
-		close(results)
+		close(latencies)
 	}()
 
-	var collectedResult []result
-	for res := range results {
-		collectedResult = append(collectedResult, res)
+	var collectedLatencies []time.Duration
+	for res := range latencies {
+		collectedLatencies = append(collectedLatencies, res)
 	}
 
-	return summarize(collectedResult, time.Since(elapsedStart)), ctx.Err()
+	return summarize(collectedLatencies, time.Since(elapsedStart), summary), ctx.Err()
 }

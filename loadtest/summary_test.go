@@ -22,61 +22,33 @@ func (timeoutError) Temporary() bool { return false }
 func TestSummary(t *testing.T) {
 
 	tests := []struct {
-		name    string
-		results []result
-		elapsed time.Duration
-		want    Summary
+		name           string
+		latencies      []time.Duration
+		partialSummary Summary
+		elapsed        time.Duration
+		want           Summary
 	}{
 		{
 			name: "all succeeded with one internal server error",
-			results: []result{
-				{
-					latency: 10 * time.Millisecond,
-					status:  http.StatusOK,
-				},
-				{
-					latency: 12 * time.Millisecond,
-					status:  http.StatusOK,
-				},
-				{
-					latency: 109 * time.Millisecond,
-					status:  http.StatusCreated,
-				},
-				{
-					latency: 7 * time.Millisecond,
-					status:  http.StatusForbidden,
-				},
-				{
-					latency: 49 * time.Millisecond,
-					status:  http.StatusProcessing,
-				},
-				{
-					latency: 21 * time.Millisecond,
-					status:  http.StatusAccepted,
-				},
-				{
-					latency: 30 * time.Millisecond,
-					status:  http.StatusOK,
-				},
-				{
-					latency: 89 * time.Millisecond,
-					status:  http.StatusOK,
-				},
-				{
-					latency: 120 * time.Millisecond,
-					status:  http.StatusCreated,
-				},
-				{
-					latency: 74 * time.Millisecond,
-					status:  http.StatusInternalServerError,
-				},
-				{
-					latency: 15 * time.Millisecond,
-					status:  http.StatusProcessing,
-				},
-				{
-					latency: 28 * time.Millisecond,
-					status:  http.StatusAccepted,
+			latencies: []time.Duration{
+				10 * time.Millisecond,
+				12 * time.Millisecond,
+				109 * time.Millisecond,
+				7 * time.Millisecond,
+				49 * time.Millisecond,
+				21 * time.Millisecond,
+				30 * time.Millisecond,
+				89 * time.Millisecond,
+				120 * time.Millisecond,
+				15 * time.Millisecond,
+				28 * time.Millisecond,
+			},
+			partialSummary: Summary{
+				Total:     12,
+				Succeeded: 11,
+				Failed:    1,
+				Errors: map[string]int{
+					statusErrText(http.StatusInternalServerError): 1,
 				},
 			},
 			elapsed: 4 * time.Second,
@@ -95,17 +67,21 @@ func TestSummary(t *testing.T) {
 			},
 		},
 		{
-			name:    "empty input",
-			results: []result{},
-			want:    Summary{Errors: map[string]int{}},
+			name:           "empty input",
+			latencies:      []time.Duration{},
+			partialSummary: Summary{Errors: map[string]int{}},
+			want:           Summary{Errors: map[string]int{}},
 		},
 		{
 			name: "0 elapsed",
-			results: []result{
-				{
-					latency: 10 * time.Millisecond,
-					status:  http.StatusOK,
-				},
+			latencies: []time.Duration{
+				10 * time.Millisecond,
+			},
+			partialSummary: Summary{
+				Total:     1,
+				Succeeded: 1,
+				Failed:    0,
+				Errors:    map[string]int{},
 			},
 			elapsed: 0 * time.Second,
 			want: Summary{
@@ -121,27 +97,21 @@ func TestSummary(t *testing.T) {
 			},
 		},
 		{
-			name: "all failures",
-			results: []result{
-				{
-					latency: 74 * time.Millisecond,
-					status:  http.StatusInternalServerError,
-				},
-				{
-					latency: 44 * time.Millisecond,
-					status:  http.StatusBadGateway,
-				},
-				{
-					err: context.DeadlineExceeded,
-				},
-				{
-					err: syscall.ECONNREFUSED,
-				},
-				{
-					err: errors.New("some new error"),
+			name:      "all failures",
+			latencies: []time.Duration{},
+			elapsed:   2 * time.Second,
+			partialSummary: Summary{
+				Total:     5,
+				Succeeded: 0,
+				Failed:    5,
+				Errors: map[string]int{
+					"connection refused":                          1,
+					"request timeout":                             1,
+					statusErrText(http.StatusInternalServerError): 1,
+					statusErrText(http.StatusBadGateway):          1,
+					"request failed":                              1,
 				},
 			},
-			elapsed: 2 * time.Second,
 			want: Summary{
 				Total:      5,
 				Succeeded:  0,
@@ -162,21 +132,18 @@ func TestSummary(t *testing.T) {
 		},
 		{
 			name: "all success, no failure",
-			results: []result{
-				{
-					latency: 10 * time.Millisecond,
-					status:  http.StatusOK,
-				},
-				{
-					latency: 12 * time.Millisecond,
-					status:  http.StatusOK,
-				},
-				{
-					latency: 19 * time.Millisecond,
-					status:  http.StatusCreated,
-				},
+			latencies: []time.Duration{
+				10 * time.Millisecond,
+				12 * time.Millisecond,
+				19 * time.Millisecond,
 			},
 			elapsed: 1 * time.Second,
+			partialSummary: Summary{
+				Total:     3,
+				Succeeded: 3,
+				Failed:    0,
+				Errors:    map[string]int{},
+			},
 			want: Summary{
 				Total:      3,
 				Succeeded:  3,
@@ -191,11 +158,14 @@ func TestSummary(t *testing.T) {
 		},
 		{
 			name: "single result",
-			results: []result{
-				{
-					latency: 10 * time.Millisecond,
-					status:  http.StatusOK,
-				},
+			latencies: []time.Duration{
+				10 * time.Millisecond,
+			},
+			partialSummary: Summary{
+				Total:     1,
+				Succeeded: 1,
+				Failed:    0,
+				Errors:    map[string]int{},
 			},
 			elapsed: 1 * time.Second,
 			want: Summary{
@@ -211,11 +181,14 @@ func TestSummary(t *testing.T) {
 			},
 		},
 		{
-			name: "unknown status code: 789 response",
-			results: []result{
-				{
-					latency: 10 * time.Millisecond,
-					status:  789,
+			name:      "unknown status code: 789 response",
+			latencies: []time.Duration{},
+			partialSummary: Summary{
+				Total:     1,
+				Succeeded: 0,
+				Failed:    1,
+				Errors: map[string]int{
+					"HTTP 789": 1,
 				},
 			},
 			elapsed: 1 * time.Second,
@@ -237,7 +210,7 @@ func TestSummary(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := summarize(tc.results, tc.elapsed)
+			got := summarize(tc.latencies, tc.elapsed, tc.partialSummary)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("summarize() = %+v, want %+v", got, tc.want)
 			}
