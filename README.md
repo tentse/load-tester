@@ -163,9 +163,9 @@ Honest about what v0.1.0 does not do yet. Each of these is planned work, not a m
 - **A malformed URL is not rejected up front.** `-url nope` passes validation, every request
   then fails the same way, and the tool still exits `0`. Check the summary, not just `$?`,
   until this is fixed.
-- **Memory grows with `-n`.** Every result is held until the run finishes, so a run of several
-  million requests uses hundreds of MB. Fine for typical runs; plan around it for very large
-  ones.
+- **Memory still grows with `-n`.** Only successful-request latencies are retained, about
+  60 MB at 2 million requests; failed requests are counted, not stored. Fine for typical runs;
+  plan around it for tens of millions.
 - **Secrets on the command line are visible** in your shell history and to anyone who can run
   `ps` while the test is running. This covers `-token`, and equally a key embedded in `-url`.
   Prefer a shell variable that you clear afterwards.
