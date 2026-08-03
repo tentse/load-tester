@@ -65,7 +65,14 @@ func classifyFailure(err error) string {
 	}
 }
 
-func summarize(latencies []time.Duration, elapsed time.Duration, summary Summary) Summary {
+func summarize(latencies []time.Duration, elapsed time.Duration, total, succeeded, failed int, errors map[string]int) Summary {
+
+	summary := Summary{
+		Total:     total,
+		Succeeded: succeeded,
+		Failed:    failed,
+		Errors:    errors,
+	}
 
 	slices.Sort(latencies)
 

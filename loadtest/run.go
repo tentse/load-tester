@@ -24,7 +24,44 @@ type Config struct {
 	Body        string
 }
 
-func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, jobs <-chan struct{}, latencies chan<- time.Duration, summary *Summary) {
+type statusTracker struct {
+	Total     int
+	Succeeded int
+	Failed    int
+	Errors    map[string]int
+
+	mu sync.Mutex
+}
+
+func (s *statusTracker) IncTotal() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Total++
+}
+
+func (s *statusTracker) IncSucceeded() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Succeeded++
+}
+
+func (s *statusTracker) IncFailed() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Failed++
+}
+
+func (s *statusTracker) UpdateErrors(status int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil {
+		s.Errors[classifyFailure(err)]++
+	} else if isServerError(status) {
+		s.Errors[statusErrText(status)]++
+	}
+}
+
+func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, jobs <-chan struct{}, latencies chan<- time.Duration, statusTracker *statusTracker) {
 	defer wg.Done()
 	for {
 		select {
@@ -36,18 +73,14 @@ func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, job
 			}
 			start := time.Now()
 			status, err := r.hit(ctx, cfg.Method, cfg.URL, cfg.Token, cfg.Body)
-			summary.Total++
-			if err != nil {
-				summary.Failed++
-				summary.Errors[classifyFailure(err)]++
-			} else if isServerError(status) {
-				summary.Failed++
-				summary.Errors[statusErrText(status)]++
+			statusTracker.IncTotal()
+			if err != nil || isServerError(status) {
+				statusTracker.IncFailed()
+				statusTracker.UpdateErrors(status, err)
 			} else {
-				summary.Succeeded++
+				statusTracker.IncSucceeded()
 				latencies <- time.Since(start)
 			}
-			// results <- result{latency: time.Since(start), status: status, err: err}
 		}
 	}
 }
@@ -92,13 +125,6 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 	jobs := make(chan struct{})
 	latencies := make(chan time.Duration)
 
-	summary := Summary{
-		Total:     0,
-		Succeeded: 0,
-		Failed:    0,
-		Errors:    map[string]int{},
-	}
-
 	r := newRunner(config.Timeout)
 	defer r.client.CloseIdleConnections()
 
@@ -115,11 +141,15 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 		}
 	}()
 
+	statusTracker := statusTracker{
+		Errors: map[string]int{},
+	}
+
 	var wg sync.WaitGroup
 	for i := 1; i <= config.Concurrency; i++ {
 		wg.Add(1)
 		go func() {
-			r.worker(ctx, &wg, config, jobs, latencies, &summary)
+			r.worker(ctx, &wg, config, jobs, latencies, &statusTracker)
 		}()
 	}
 
@@ -133,5 +163,5 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 		collectedLatencies = append(collectedLatencies, res)
 	}
 
-	return summarize(collectedLatencies, time.Since(elapsedStart), summary), ctx.Err()
+	return summarize(collectedLatencies, time.Since(elapsedStart), statusTracker.Total, statusTracker.Succeeded, statusTracker.Failed, statusTracker.Errors), ctx.Err()
 }

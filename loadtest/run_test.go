@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -350,5 +351,26 @@ func TestRunClosesIdleConnections(t *testing.T) {
 	case <-closed:
 	case <-time.After(defaultTimeout):
 		t.Fatal("run returned without closing the idle connection")
+	}
+}
+
+func TestWorkersUpdatingStatusTrackerValue(t *testing.T) {
+	wantedSucceededCount := 1000
+	statusTracker := statusTracker{}
+
+	var wg sync.WaitGroup
+	wg.Add(wantedSucceededCount)
+
+	for i := 1; i <= wantedSucceededCount; i++ {
+		go func() {
+			defer wg.Done()
+			statusTracker.IncSucceeded()
+		}()
+	}
+
+	wg.Wait()
+
+	if statusTracker.Succeeded != wantedSucceededCount {
+		t.Errorf("got succeeded count: %d, want: %d", statusTracker.Succeeded, wantedSucceededCount)
 	}
 }

@@ -25,6 +25,10 @@ func TestSummary(t *testing.T) {
 		name           string
 		latencies      []time.Duration
 		partialSummary Summary
+		total          int
+		succeeded      int
+		failed         int
+		errors         map[string]int
 		elapsed        time.Duration
 		want           Summary
 	}{
@@ -43,13 +47,11 @@ func TestSummary(t *testing.T) {
 				15 * time.Millisecond,
 				28 * time.Millisecond,
 			},
-			partialSummary: Summary{
-				Total:     12,
-				Succeeded: 11,
-				Failed:    1,
-				Errors: map[string]int{
-					statusErrText(http.StatusInternalServerError): 1,
-				},
+			total:     12,
+			succeeded: 11,
+			failed:    1,
+			errors: map[string]int{
+				statusErrText(http.StatusInternalServerError): 1,
 			},
 			elapsed: 4 * time.Second,
 			want: Summary{
@@ -67,23 +69,21 @@ func TestSummary(t *testing.T) {
 			},
 		},
 		{
-			name:           "empty input",
-			latencies:      []time.Duration{},
-			partialSummary: Summary{Errors: map[string]int{}},
-			want:           Summary{Errors: map[string]int{}},
+			name:      "empty input",
+			latencies: []time.Duration{},
+			errors:    map[string]int{},
+			want:      Summary{Errors: map[string]int{}},
 		},
 		{
 			name: "0 elapsed",
 			latencies: []time.Duration{
 				10 * time.Millisecond,
 			},
-			partialSummary: Summary{
-				Total:     1,
-				Succeeded: 1,
-				Failed:    0,
-				Errors:    map[string]int{},
-			},
-			elapsed: 0 * time.Second,
+			total:     1,
+			succeeded: 1,
+			failed:    0,
+			errors:    map[string]int{},
+			elapsed:   0 * time.Second,
 			want: Summary{
 				Total:      1,
 				Succeeded:  1,
@@ -100,17 +100,15 @@ func TestSummary(t *testing.T) {
 			name:      "all failures",
 			latencies: []time.Duration{},
 			elapsed:   2 * time.Second,
-			partialSummary: Summary{
-				Total:     5,
-				Succeeded: 0,
-				Failed:    5,
-				Errors: map[string]int{
-					"connection refused":                          1,
-					"request timeout":                             1,
-					statusErrText(http.StatusInternalServerError): 1,
-					statusErrText(http.StatusBadGateway):          1,
-					"request failed":                              1,
-				},
+			total:     5,
+			succeeded: 0,
+			failed:    5,
+			errors: map[string]int{
+				"connection refused":                          1,
+				"request timeout":                             1,
+				statusErrText(http.StatusInternalServerError): 1,
+				statusErrText(http.StatusBadGateway):          1,
+				"request failed":                              1,
 			},
 			want: Summary{
 				Total:      5,
@@ -137,13 +135,11 @@ func TestSummary(t *testing.T) {
 				12 * time.Millisecond,
 				19 * time.Millisecond,
 			},
-			elapsed: 1 * time.Second,
-			partialSummary: Summary{
-				Total:     3,
-				Succeeded: 3,
-				Failed:    0,
-				Errors:    map[string]int{},
-			},
+			elapsed:   1 * time.Second,
+			total:     3,
+			succeeded: 3,
+			failed:    0,
+			errors:    map[string]int{},
 			want: Summary{
 				Total:      3,
 				Succeeded:  3,
@@ -161,13 +157,11 @@ func TestSummary(t *testing.T) {
 			latencies: []time.Duration{
 				10 * time.Millisecond,
 			},
-			partialSummary: Summary{
-				Total:     1,
-				Succeeded: 1,
-				Failed:    0,
-				Errors:    map[string]int{},
-			},
-			elapsed: 1 * time.Second,
+			total:     1,
+			succeeded: 1,
+			failed:    0,
+			errors:    map[string]int{},
+			elapsed:   1 * time.Second,
 			want: Summary{
 				Total:      1,
 				Succeeded:  1,
@@ -183,13 +177,11 @@ func TestSummary(t *testing.T) {
 		{
 			name:      "unknown status code: 789 response",
 			latencies: []time.Duration{},
-			partialSummary: Summary{
-				Total:     1,
-				Succeeded: 0,
-				Failed:    1,
-				Errors: map[string]int{
-					"HTTP 789": 1,
-				},
+			total:     1,
+			succeeded: 0,
+			failed:    1,
+			errors: map[string]int{
+				"HTTP 789": 1,
 			},
 			elapsed: 1 * time.Second,
 			want: Summary{
@@ -210,7 +202,7 @@ func TestSummary(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := summarize(tc.latencies, tc.elapsed, tc.partialSummary)
+			got := summarize(tc.latencies, tc.elapsed, tc.total, tc.succeeded, tc.failed, tc.errors)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("summarize() = %+v, want %+v", got, tc.want)
 			}
