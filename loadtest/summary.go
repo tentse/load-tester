@@ -19,12 +19,6 @@ const (
 	p99 = 0.99
 )
 
-type result struct {
-	latency time.Duration
-	status  int
-	err     error
-}
-
 // Summary reports the completed portion of a load test.
 //
 // A request succeeds when it completes without an error and its HTTP status is
@@ -71,34 +65,23 @@ func classifyFailure(err error) string {
 	}
 }
 
-func summarize(results []result, elapsed time.Duration) Summary {
+func summarize(latencies []time.Duration, elapsed time.Duration, total, succeeded, failed int, errors map[string]int) Summary {
+
 	summary := Summary{
-		Total:   len(results),
-		Elapsed: elapsed,
-		Errors:  make(map[string]int),
+		Total:     total,
+		Succeeded: succeeded,
+		Failed:    failed,
+		Errors:    errors,
 	}
 
-	var durations []time.Duration
-	for _, res := range results {
-		if res.err != nil {
-			summary.Errors[classifyFailure(res.err)]++
-			summary.Failed++
-		} else if isServerError(res.status) {
-			summary.Errors[statusErrText(res.status)]++
-			summary.Failed++
-		} else {
-			durations = append(durations, res.latency)
-			summary.Succeeded++
-		}
-	}
+	slices.Sort(latencies)
 
-	slices.Sort(durations)
-
-	summary.P50 = percentile(durations, p50)
-	summary.P90 = percentile(durations, p90)
-	summary.P99 = percentile(durations, p99)
+	summary.P50 = percentile(latencies, p50)
+	summary.P90 = percentile(latencies, p90)
+	summary.P99 = percentile(latencies, p99)
 
 	summary.Throughput = throughput(summary.Succeeded, elapsed)
+	summary.Elapsed = elapsed
 
 	return summary
 }

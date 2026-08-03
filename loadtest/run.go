@@ -24,7 +24,44 @@ type Config struct {
 	Body        string
 }
 
-func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, jobs <-chan struct{}, results chan<- result) {
+type statusTracker struct {
+	Total     int
+	Succeeded int
+	Failed    int
+	Errors    map[string]int
+
+	mu sync.Mutex
+}
+
+func (s *statusTracker) IncTotal() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Total++
+}
+
+func (s *statusTracker) IncSucceeded() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Succeeded++
+}
+
+func (s *statusTracker) IncFailed() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Failed++
+}
+
+func (s *statusTracker) UpdateErrors(status int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil {
+		s.Errors[classifyFailure(err)]++
+	} else if isServerError(status) {
+		s.Errors[statusErrText(status)]++
+	}
+}
+
+func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, jobs <-chan struct{}, latencies chan<- time.Duration, statusTracker *statusTracker) {
 	defer wg.Done()
 	for {
 		select {
@@ -36,7 +73,14 @@ func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, job
 			}
 			start := time.Now()
 			status, err := r.hit(ctx, cfg.Method, cfg.URL, cfg.Token, cfg.Body)
-			results <- result{latency: time.Since(start), status: status, err: err}
+			statusTracker.IncTotal()
+			if err != nil || isServerError(status) {
+				statusTracker.IncFailed()
+				statusTracker.UpdateErrors(status, err)
+			} else {
+				statusTracker.IncSucceeded()
+				latencies <- time.Since(start)
+			}
 		}
 	}
 }
@@ -79,7 +123,7 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 	}
 
 	jobs := make(chan struct{})
-	results := make(chan result)
+	latencies := make(chan time.Duration)
 
 	r := newRunner(config.Timeout)
 	defer r.client.CloseIdleConnections()
@@ -97,23 +141,27 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 		}
 	}()
 
+	statusTracker := statusTracker{
+		Errors: map[string]int{},
+	}
+
 	var wg sync.WaitGroup
 	for i := 1; i <= config.Concurrency; i++ {
 		wg.Add(1)
 		go func() {
-			r.worker(ctx, &wg, config, jobs, results)
+			r.worker(ctx, &wg, config, jobs, latencies, &statusTracker)
 		}()
 	}
 
 	go func() {
 		wg.Wait()
-		close(results)
+		close(latencies)
 	}()
 
-	var collectedResult []result
-	for res := range results {
-		collectedResult = append(collectedResult, res)
+	var collectedLatencies []time.Duration
+	for res := range latencies {
+		collectedLatencies = append(collectedLatencies, res)
 	}
 
-	return summarize(collectedResult, time.Since(elapsedStart)), ctx.Err()
+	return summarize(collectedLatencies, time.Since(elapsedStart), statusTracker.Total, statusTracker.Succeeded, statusTracker.Failed, statusTracker.Errors), ctx.Err()
 }
