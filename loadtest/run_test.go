@@ -93,11 +93,10 @@ func TestServerErrors(t *testing.T) {
 	defer errorMockServer.Close()
 
 	tests := []struct {
-		name            string
-		cfg             Config
-		want            Summary
-		wantErrContains string
-		wantStats       bool
+		name      string
+		cfg       Config
+		want      Summary
+		wantStats bool
 	}{
 		{
 			name: "all 500s",

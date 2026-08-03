@@ -41,6 +41,7 @@ func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, job
 				summary.Failed++
 				summary.Errors[classifyFailure(err)]++
 			} else if isServerError(status) {
+				summary.Failed++
 				summary.Errors[statusErrText(status)]++
 			} else {
 				summary.Succeeded++
