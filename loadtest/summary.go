@@ -76,9 +76,9 @@ func summarize(latencies []time.Duration, elapsed time.Duration, total, succeede
 
 	slices.Sort(latencies)
 
-	summary.P50 = percentile(latencies, p50)
-	summary.P90 = percentile(latencies, p90)
-	summary.P99 = percentile(latencies, p99)
+	// summary.P50 = percentile(latencies, p50)
+	// summary.P90 = percentile(latencies, p90)
+	// summary.P99 = percentile(latencies, p99)
 
 	summary.Throughput = throughput(summary.Succeeded, elapsed)
 	summary.Elapsed = elapsed
