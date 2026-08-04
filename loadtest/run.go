@@ -24,6 +24,51 @@ type Config struct {
 	Body        string
 }
 
+// bucketEdges are the exclusive upper bounds edges of the latency display range
+// bucket i covers [bucketEdges[i-1], bucketEdges[i])
+// bucket 0 covers [0, bucketEdges[0]) and final bucket covers [last, +Inf)
+var bucketEdges = [...]time.Duration{
+	1 * time.Millisecond,
+	2 * time.Millisecond,
+	5 * time.Millisecond,
+	10 * time.Millisecond,
+	20 * time.Millisecond,
+	50 * time.Millisecond,
+	100 * time.Millisecond,
+	200 * time.Millisecond,
+	500 * time.Millisecond,
+	1 * time.Second,
+	2 * time.Second,
+	5 * time.Second,
+	10 * time.Second,
+}
+
+type latencyHistogram struct {
+	counts   [len(bucketEdges) + 1]int64
+	min, max time.Duration
+	total    int64
+}
+
+func (lh *latencyHistogram) observe(d time.Duration) {
+	lh.counts[bucketIndex(d)]++
+	lh.total++
+	if lh.total == 1 || d < lh.min {
+		lh.min = d
+	}
+	if d > lh.max {
+		lh.max = d
+	}
+}
+
+func bucketIndex(time time.Duration) int {
+	for index, value := range bucketEdges {
+		if time < value {
+			return index
+		}
+	}
+	return 13
+}
+
 type statusTracker struct {
 	Total     int
 	Succeeded int
