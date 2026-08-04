@@ -354,6 +354,26 @@ func TestRunClosesIdleConnections(t *testing.T) {
 	}
 }
 
+func TestWorkersUpdatingLatencyHistogramValue(t *testing.T) {
+	wantedTotal := 1000
+	lh := latencyHistogram{}
+
+	var wg sync.WaitGroup
+	wg.Add(wantedTotal)
+
+	for i := 1; i <= wantedTotal; i++ {
+		go func() {
+			defer wg.Done()
+			lh.observe(10 * time.Millisecond)
+		}()
+	}
+	wg.Wait()
+
+	if lh.total != int64(wantedTotal) {
+		t.Errorf("got total count: %d, want total count: %d", lh.total, wantedTotal)
+	}
+}
+
 func TestWorkersUpdatingStatusTrackerValue(t *testing.T) {
 	wantedSucceededCount := 1000
 	statusTracker := statusTracker{}

@@ -47,9 +47,14 @@ type latencyHistogram struct {
 	counts   [len(bucketEdges) + 1]int64
 	min, max time.Duration
 	total    int64
+
+	mu sync.Mutex
 }
 
 func (lh *latencyHistogram) observe(d time.Duration) {
+	lh.mu.Lock()
+	defer lh.mu.Unlock()
+
 	lh.counts[bucketIndex(d)]++
 	lh.total++
 	if lh.total == 1 || d < lh.min {
