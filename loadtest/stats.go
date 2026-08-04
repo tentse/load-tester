@@ -5,15 +5,25 @@ import (
 	"time"
 )
 
-func percentile(sortedDurations []time.Duration, p float64) time.Duration {
-	n := len(sortedDurations)
-	if n == 0 {
-		return 0
+func percentile(lh *latencyHistogram, p float64) time.Duration {
+
+	p = min(float64(1), p)
+	p = max(float64(0), p)
+
+	percentileIndex := max(1, int64(math.Ceil(p*float64(lh.total))))
+
+	count := int64(0)
+
+	sizeBucketEdge := len(bucketEdges)
+
+	for index, value := range lh.counts {
+		if index == sizeBucketEdge {
+			break
+		}
+		count += value
+		if count >= percentileIndex {
+			return bucketEdges[index]
+		}
 	}
-
-	index := int(math.Ceil(p*float64(n))) - 1
-
-	index = max(0, min(n-1, index))
-
-	return sortedDurations[index]
+	return lh.max
 }

@@ -24,6 +24,56 @@ type Config struct {
 	Body        string
 }
 
+// bucketEdges are the exclusive upper bounds edges of the latency display range
+// bucket i covers [bucketEdges[i-1], bucketEdges[i])
+// bucket 0 covers [0, bucketEdges[0]) and final bucket covers [last, +Inf)
+var bucketEdges = [...]time.Duration{
+	1 * time.Millisecond,
+	2 * time.Millisecond,
+	5 * time.Millisecond,
+	10 * time.Millisecond,
+	20 * time.Millisecond,
+	50 * time.Millisecond,
+	100 * time.Millisecond,
+	200 * time.Millisecond,
+	500 * time.Millisecond,
+	1 * time.Second,
+	2 * time.Second,
+	5 * time.Second,
+	10 * time.Second,
+}
+
+type latencyHistogram struct {
+	counts   [len(bucketEdges) + 1]int64
+	min, max time.Duration
+	total    int64
+
+	mu sync.Mutex
+}
+
+func (lh *latencyHistogram) observe(d time.Duration) {
+	lh.mu.Lock()
+	defer lh.mu.Unlock()
+
+	lh.counts[bucketIndex(d)]++
+	lh.total++
+	if lh.total == 1 || d < lh.min {
+		lh.min = d
+	}
+	if d > lh.max {
+		lh.max = d
+	}
+}
+
+func bucketIndex(time time.Duration) int {
+	for index, value := range bucketEdges {
+		if time < value {
+			return index
+		}
+	}
+	return 13
+}
+
 type statusTracker struct {
 	Total     int
 	Succeeded int
@@ -61,7 +111,7 @@ func (s *statusTracker) UpdateErrors(status int, err error) {
 	}
 }
 
-func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, jobs <-chan struct{}, latencies chan<- time.Duration, statusTracker *statusTracker) {
+func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, jobs <-chan struct{}, lh *latencyHistogram, statusTracker *statusTracker) {
 	defer wg.Done()
 	for {
 		select {
@@ -79,7 +129,8 @@ func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, job
 				statusTracker.UpdateErrors(status, err)
 			} else {
 				statusTracker.IncSucceeded()
-				latencies <- time.Since(start)
+				latency := time.Since(start)
+				lh.observe(latency)
 			}
 		}
 	}
@@ -123,6 +174,7 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 	}
 
 	jobs := make(chan struct{})
+	lh := latencyHistogram{}
 	latencies := make(chan time.Duration)
 
 	r := newRunner(config.Timeout)
@@ -149,7 +201,7 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 	for i := 1; i <= config.Concurrency; i++ {
 		wg.Add(1)
 		go func() {
-			r.worker(ctx, &wg, config, jobs, latencies, &statusTracker)
+			r.worker(ctx, &wg, config, jobs, &lh, &statusTracker)
 		}()
 	}
 
@@ -163,5 +215,5 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 		collectedLatencies = append(collectedLatencies, res)
 	}
 
-	return summarize(collectedLatencies, time.Since(elapsedStart), statusTracker.Total, statusTracker.Succeeded, statusTracker.Failed, statusTracker.Errors), ctx.Err()
+	return summarize(&lh, time.Since(elapsedStart), statusTracker.Total, statusTracker.Succeeded, statusTracker.Failed, statusTracker.Errors), ctx.Err()
 }

@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -26,8 +25,10 @@ const (
 //
 // Total counts completed request attempts, so it can be less than Config.Requests
 // after cancellation. Elapsed is the wall-clock run duration. Throughput is
-// successful requests per second. P50, P90, and P99 are nearest-rank latencies
-// calculated from successful requests only.
+// successful requests per second. P50, P90, and P99 are latency percentiles over
+// successful requests only. Latencies are counted into a fixed bucket ladder
+// rather than retained, so each percentile is the upper bound of the bucket it
+// falls into and can overstate the true latency.
 //
 // Errors maps stable failure categories and HTTP server-error descriptions to
 // their occurrence counts. Request failures are classified as request timeout,
@@ -65,7 +66,7 @@ func classifyFailure(err error) string {
 	}
 }
 
-func summarize(latencies []time.Duration, elapsed time.Duration, total, succeeded, failed int, errors map[string]int) Summary {
+func summarize(lh *latencyHistogram, elapsed time.Duration, total, succeeded, failed int, errors map[string]int) Summary {
 
 	summary := Summary{
 		Total:     total,
@@ -74,11 +75,9 @@ func summarize(latencies []time.Duration, elapsed time.Duration, total, succeede
 		Errors:    errors,
 	}
 
-	slices.Sort(latencies)
-
-	summary.P50 = percentile(latencies, p50)
-	summary.P90 = percentile(latencies, p90)
-	summary.P99 = percentile(latencies, p99)
+	summary.P50 = percentile(lh, p50)
+	summary.P90 = percentile(lh, p90)
+	summary.P99 = percentile(lh, p99)
 
 	summary.Throughput = throughput(summary.Succeeded, elapsed)
 	summary.Elapsed = elapsed

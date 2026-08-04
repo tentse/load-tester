@@ -60,9 +60,9 @@ func TestSummary(t *testing.T) {
 				Failed:     1,
 				Elapsed:    4 * time.Second,
 				Throughput: 2.75,
-				P50:        28 * time.Millisecond,
-				P90:        109 * time.Millisecond,
-				P99:        120 * time.Millisecond,
+				P50:        50 * time.Millisecond,
+				P90:        200 * time.Millisecond,
+				P99:        200 * time.Millisecond,
 				Errors: map[string]int{
 					statusErrText(http.StatusInternalServerError): 1,
 				},
@@ -90,9 +90,9 @@ func TestSummary(t *testing.T) {
 				Failed:     0,
 				Elapsed:    0 * time.Second,
 				Throughput: 0,
-				P50:        10 * time.Millisecond,
-				P90:        10 * time.Millisecond,
-				P99:        10 * time.Millisecond,
+				P50:        20 * time.Millisecond,
+				P90:        20 * time.Millisecond,
+				P99:        20 * time.Millisecond,
 				Errors:     map[string]int{},
 			},
 		},
@@ -146,9 +146,9 @@ func TestSummary(t *testing.T) {
 				Failed:     0,
 				Elapsed:    1 * time.Second,
 				Throughput: 3,
-				P50:        12 * time.Millisecond,
-				P90:        19 * time.Millisecond,
-				P99:        19 * time.Millisecond,
+				P50:        20 * time.Millisecond,
+				P90:        20 * time.Millisecond,
+				P99:        20 * time.Millisecond,
 				Errors:     map[string]int{},
 			},
 		},
@@ -168,9 +168,9 @@ func TestSummary(t *testing.T) {
 				Failed:     0,
 				Elapsed:    1 * time.Second,
 				Throughput: 1,
-				P50:        10 * time.Millisecond,
-				P90:        10 * time.Millisecond,
-				P99:        10 * time.Millisecond,
+				P50:        20 * time.Millisecond,
+				P90:        20 * time.Millisecond,
+				P99:        20 * time.Millisecond,
 				Errors:     map[string]int{},
 			},
 		},
@@ -202,7 +202,14 @@ func TestSummary(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := summarize(tc.latencies, tc.elapsed, tc.total, tc.succeeded, tc.failed, tc.errors)
+
+			lh := latencyHistogram{}
+
+			for _, value := range tc.latencies {
+				lh.observe(value)
+			}
+
+			got := summarize(&lh, tc.elapsed, tc.total, tc.succeeded, tc.failed, tc.errors)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("summarize() = %+v, want %+v", got, tc.want)
 			}

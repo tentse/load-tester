@@ -31,9 +31,11 @@
 // A request succeeds when it completes without a transport error and its HTTP
 // status is below 500. As of now statuses of 500 and above, and requests that never
 // complete, are considered as failures. Summary.Throughput counts successful requests per
-// second, and Summary.P50, P90, and P99 are nearest rank latencies over
-// successful requests only. Each latency covers the complete request, including
-// reading the response body. Redirects are followed using the default net/http
+// second, and Summary.P50, P90, and P99 are latency percentiles over successful
+// requests only. Latencies are counted into a fixed bucket ladder rather than
+// retained individually, so each percentile is the upper bound of the bucket it
+// falls into and can overstate the true latency. Each latency covers the complete
+// request, including reading the response body. Redirects are followed using the default net/http
 // policy, so the status recorded is the one at the end of the redirect chain.
 //
 // Run returns an error only for an invalid Config or a canceled context. Failed
@@ -49,6 +51,25 @@
 // This package generates real load. Only point it at systems you own or have
 // explicit permission to test.
 //
-// For now, it is best to keep the number of requests moderate, since all results are
-// currently stored in memory and large runs can consume a significant amount of RAM.
+// Memory does not scale with Config.Requests. Each successful latency is counted
+// into one of a fixed set of buckets as it arrives and the timing itself is
+// discarded, so a run of ten million requests costs the same as a run of ten.
+//
+// The buckets are half-open, so [1ms, 2ms) includes exactly 1ms and excludes
+// 2ms, and every latency lands in exactly one of them:
+//
+//	<1ms      1-2ms     2-5ms      5-10ms     10-20ms
+//	20-50ms   50-100ms  100-200ms  200-500ms  500ms-1s
+//	1-2s      2-5s      5-10s      >=10s
+//
+// They are multiplicative rather than evenly spaced, each roughly 2 to 2.5 times
+// the width of the last, because latency is skewed: evenly spaced buckets would
+// place nearly every request in the first one and spend the rest on an empty tail.
+//
+// A percentile is read by walking the buckets from fastest to slowest,
+// accumulating counts until the target rank is reached, and reporting that
+// bucket's upper bound. Summary.P50, P90, and P99 are therefore always one of the
+// bounds listed above, except when the percentile falls in the final open-ended
+// bucket, where the largest observed latency is reported instead. Memory is
+// constant, but a percentile is only known to the width of the bucket it lands in.
 package loadtest

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -141,7 +142,7 @@ func TestServerErrors(t *testing.T) {
 	}
 }
 
-func TestValidateConfig(t *testing.T) {
+func TestInvalidConfig(t *testing.T) {
 
 	okMockServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer okMockServer.Close()
@@ -151,7 +152,6 @@ func TestValidateConfig(t *testing.T) {
 		cfg             Config
 		want            Summary
 		wantErrContains string
-		wantStats       bool
 	}{
 		{
 			name: "empty get method",
@@ -354,6 +354,26 @@ func TestRunClosesIdleConnections(t *testing.T) {
 	}
 }
 
+func TestWorkersUpdatingLatencyHistogramValue(t *testing.T) {
+	wantedTotal := 1000
+	lh := latencyHistogram{}
+
+	var wg sync.WaitGroup
+	wg.Add(wantedTotal)
+
+	for i := 1; i <= wantedTotal; i++ {
+		go func() {
+			defer wg.Done()
+			lh.observe(10 * time.Millisecond)
+		}()
+	}
+	wg.Wait()
+
+	if lh.total != int64(wantedTotal) {
+		t.Errorf("got total count: %d, want total count: %d", lh.total, wantedTotal)
+	}
+}
+
 func TestWorkersUpdatingStatusTrackerValue(t *testing.T) {
 	wantedSucceededCount := 1000
 	statusTracker := statusTracker{}
@@ -372,5 +392,121 @@ func TestWorkersUpdatingStatusTrackerValue(t *testing.T) {
 
 	if statusTracker.Succeeded != wantedSucceededCount {
 		t.Errorf("got succeeded count: %d, want: %d", statusTracker.Succeeded, wantedSucceededCount)
+	}
+}
+
+func TestBucketIndex(t *testing.T) {
+	tests := []struct {
+		time time.Duration
+		want int
+	}{
+		{
+			time: 200 * time.Microsecond,
+			want: 0,
+		},
+		{
+			time: 10 * time.Millisecond,
+			want: 4,
+		},
+		{
+			time: 49 * time.Millisecond,
+			want: 5,
+		},
+		{
+			time: 12 * time.Second,
+			want: 13,
+		},
+	}
+
+	for _, tc := range tests {
+		got := bucketIndex(tc.time)
+		if got != tc.want {
+			t.Errorf("got index: %d, want index: %d", got, tc.want)
+		}
+	}
+}
+
+func TestLatencyHistogram(t *testing.T) {
+
+	tests := []struct {
+		name      string
+		latencies []time.Duration
+		want      latencyHistogram
+	}{
+		{
+			name: "mix latencies",
+			latencies: []time.Duration{
+				200 * time.Microsecond,
+				10 * time.Millisecond,
+				49 * time.Millisecond,
+				12 * time.Second,
+			},
+			want: latencyHistogram{
+				counts: [...]int64{
+					1, // -Inf <= t < 1ms
+					0, // 1ms <= t < 2ms
+					0, // 2ms <= t < 5ms
+					0, // 5ms <= t < 10ms
+					1, // 10ms <= t < 20ms
+					1, // 20ms <= t < 50ms
+					0, // 50ms <= t < 100ms
+					0, // 100ms <= t < 200ms
+					0, // 200ms <= t < 500ms
+					0, // 500ms <= t < 1s
+					0, // 1s <= t < 2s
+					0, // 2s <= t < 5s
+					0, // 5s <= t < 10s
+					1, // 10s <= t < +Inf
+				},
+				min:   200 * time.Microsecond,
+				max:   12 * time.Second,
+				total: 4,
+			},
+		},
+		{
+			name: "boundary latencies",
+			latencies: []time.Duration{
+				1 * time.Millisecond,
+				10 * time.Second,
+			},
+			want: latencyHistogram{
+				counts: [...]int64{
+					0, // -Inf <= t < 1ms
+					1, // 1ms <= t < 2ms
+					0, // 2ms <= t < 5ms
+					0, // 5ms <= t < 10ms
+					0, // 10ms <= t < 20ms
+					0, // 20ms <= t < 50ms
+					0, // 50ms <= t < 100ms
+					0, // 100ms <= t < 200ms
+					0, // 200ms <= t < 500ms
+					0, // 500ms <= t < 1s
+					0, // 1s <= t < 2s
+					0, // 2s <= t < 5s
+					0, // 5s <= t < 10s
+					1, // 10s <= t < +Inf
+				},
+				min:   1 * time.Millisecond,
+				max:   10 * time.Second,
+				total: 2,
+			},
+		},
+	}
+
+	for i := range tests {
+		tc := &tests[i]
+		t.Run(tc.name, func(t *testing.T) {
+
+			got := &latencyHistogram{}
+
+			for _, value := range tc.latencies {
+				got.observe(value)
+			}
+
+			want := &tc.want
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("got latency histogram: %+v, want latency histogram: %+v", got, &tc.want)
+			}
+		})
 	}
 }
