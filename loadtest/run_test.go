@@ -465,17 +465,19 @@ func TestLatencyHistogram(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
+	for i := range tests {
+		tc := &tests[i]
 		t.Run(tc.name, func(t *testing.T) {
 
-			got := latencyHistogram{}
+			got := &latencyHistogram{}
 
 			for _, value := range tc.latencies {
 				got.observe(value)
 			}
 
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("got latency histogram: %+v, want latency histogram: %+v", got, tc.want)
+			want := &tc.want
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("got latency histogram: %+v, want latency histogram: %+v", got, &tc.want)
 			}
 		})
 	}
