@@ -463,6 +463,34 @@ func TestLatencyHistogram(t *testing.T) {
 				total: 4,
 			},
 		},
+		{
+			name: "boundary latencies",
+			latencies: []time.Duration{
+				1 * time.Millisecond,
+				10 * time.Second,
+			},
+			want: latencyHistogram{
+				counts: [...]int64{
+					0, // -Inf <= t < 1ms
+					1, // 1ms <= t < 2ms
+					0, // 2ms <= t < 5ms
+					0, // 5ms <= t < 10ms
+					0, // 10ms <= t < 20ms
+					0, // 20ms <= t < 50ms
+					0, // 50ms <= t < 100ms
+					0, // 100ms <= t < 200ms
+					0, // 200ms <= t < 500ms
+					0, // 500ms <= t < 1s
+					0, // 1s <= t < 2s
+					0, // 2s <= t < 5s
+					0, // 5s <= t < 10s
+					1, // 10s <= t < +Inf
+				},
+				min:   1 * time.Millisecond,
+				max:   10 * time.Second,
+				total: 2,
+			},
+		},
 	}
 
 	for i := range tests {
