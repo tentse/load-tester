@@ -106,7 +106,7 @@ func (s *statusTracker) UpdateErrors(status int, err error) {
 	}
 }
 
-func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, jobs <-chan struct{}, latencies chan<- time.Duration, statusTracker *statusTracker) {
+func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, jobs <-chan struct{}, latencyHistogram *latencyHistogram, statusTracker *statusTracker) {
 	defer wg.Done()
 	for {
 		select {
@@ -124,7 +124,8 @@ func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, job
 				statusTracker.UpdateErrors(status, err)
 			} else {
 				statusTracker.IncSucceeded()
-				latencies <- time.Since(start)
+				latency := time.Since(start)
+				latencyHistogram.observe(latency)
 			}
 		}
 	}
@@ -168,6 +169,7 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 	}
 
 	jobs := make(chan struct{})
+	latencyHistogram := latencyHistogram{}
 	latencies := make(chan time.Duration)
 
 	r := newRunner(config.Timeout)
@@ -194,7 +196,7 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 	for i := 1; i <= config.Concurrency; i++ {
 		wg.Add(1)
 		go func() {
-			r.worker(ctx, &wg, config, jobs, latencies, &statusTracker)
+			r.worker(ctx, &wg, config, jobs, &latencyHistogram, &statusTracker)
 		}()
 	}
 
@@ -208,5 +210,5 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 		collectedLatencies = append(collectedLatencies, res)
 	}
 
-	return summarize(latencyHistogram{}, time.Since(elapsedStart), statusTracker.Total, statusTracker.Succeeded, statusTracker.Failed, statusTracker.Errors), ctx.Err()
+	return summarize(latencyHistogram, time.Since(elapsedStart), statusTracker.Total, statusTracker.Succeeded, statusTracker.Failed, statusTracker.Errors), ctx.Err()
 }
