@@ -209,7 +209,7 @@ func TestSummary(t *testing.T) {
 				lh.observe(value)
 			}
 
-			got := summarize(lh, tc.elapsed, tc.total, tc.succeeded, tc.failed, tc.errors)
+			got := summarize(&lh, tc.elapsed, tc.total, tc.succeeded, tc.failed, tc.errors)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("summarize() = %+v, want %+v", got, tc.want)
 			}

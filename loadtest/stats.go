@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func percentile(lh latencyHistogram, p float64) time.Duration {
+func percentile(lh *latencyHistogram, p float64) time.Duration {
 
 	p = min(float64(1), p)
 	p = max(float64(0), p)

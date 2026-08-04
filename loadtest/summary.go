@@ -64,7 +64,7 @@ func classifyFailure(err error) string {
 	}
 }
 
-func summarize(lh latencyHistogram, elapsed time.Duration, total, succeeded, failed int, errors map[string]int) Summary {
+func summarize(lh *latencyHistogram, elapsed time.Duration, total, succeeded, failed int, errors map[string]int) Summary {
 
 	summary := Summary{
 		Total:     total,

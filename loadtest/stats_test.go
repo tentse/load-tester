@@ -121,7 +121,7 @@ func TestPercentile(t *testing.T) {
 				lh.observe(value)
 			}
 
-			got := percentile(lh, tc.p)
+			got := percentile(&lh, tc.p)
 
 			if got != tc.want {
 				t.Errorf("percentile(%v, %v) = %v, want %v", tc.latencies, tc.p, got, tc.want)
