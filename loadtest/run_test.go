@@ -142,7 +142,7 @@ func TestServerErrors(t *testing.T) {
 	}
 }
 
-func TestValidateConfig(t *testing.T) {
+func TestInvalidConfig(t *testing.T) {
 
 	okMockServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer okMockServer.Close()
@@ -152,7 +152,6 @@ func TestValidateConfig(t *testing.T) {
 		cfg             Config
 		want            Summary
 		wantErrContains string
-		wantStats       bool
 	}{
 		{
 			name: "empty get method",

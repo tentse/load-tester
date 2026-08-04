@@ -208,5 +208,5 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 		collectedLatencies = append(collectedLatencies, res)
 	}
 
-	return summarize(collectedLatencies, time.Since(elapsedStart), statusTracker.Total, statusTracker.Succeeded, statusTracker.Failed, statusTracker.Errors), ctx.Err()
+	return summarize(latencyHistogram{}, time.Since(elapsedStart), statusTracker.Total, statusTracker.Succeeded, statusTracker.Failed, statusTracker.Errors), ctx.Err()
 }

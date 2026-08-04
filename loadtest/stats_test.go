@@ -90,7 +90,7 @@ func TestPercentile(t *testing.T) {
 				300 * time.Millisecond,
 			},
 			p:    1.5,
-			want: 500 * time.Millisecond, // rank exceeds total, so max is reported
+			want: 500 * time.Millisecond, // 300 falls between [200ms, 500ms) -> returns 500ms
 		},
 		{
 			name: "p>1 clamps to last with +Inf result",
