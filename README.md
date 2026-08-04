@@ -51,9 +51,9 @@ Succeeded: 500
 Failed: 0
 Elapsed: 249.2195ms
 Throughput: 2006.26 req/s
-P50: 4.9175ms
-P90: 7.433791ms
-P99: 127.457334ms
+P50: 5ms
+P90: 10ms
+P99: 200ms
 Errors:
 n/a
 ```
@@ -92,14 +92,61 @@ request rate — throughput is whatever the target can absorb.
   responses, are counted as failures. Note that `404` counts as a success: the server
   responded, which is what a load test measures.
 - **Throughput** — successful requests per second over the wall-clock run.
-- **P50 / P90 / P99** — nearest-rank percentiles over **successful requests only**, so a wave
+- **P50 / P90 / P99** — latency percentiles over **successful requests only**, so a wave
   of fast connection refusals cannot flatter your latency numbers. Each measurement covers the
-  full request including reading the response body.
+  full request including reading the response body. Percentiles are reported as the **upper
+  bound** of a latency bucket, so read `P99: 200ms` as "99% of successful requests finished in
+  under 200ms" — see [How latencies are aggregated](#how-latencies-are-aggregated) below.
 - **Errors** — safe, stable failure categories grouped by how often they occurred, most
   frequent first. Request timeouts, connection refusals, connection resets, truncated
   responses, and unknown request failures use fixed category names. URL user information and
   query values are not included in these categories, and equivalent failures are grouped
   together even when their underlying network errors contain different local ports.
+
+### How latencies are aggregated
+
+A run can send millions of requests, so keeping every latency in memory does not scale.
+Instead, each successful request's latency is counted into one of 14 fixed buckets, and only
+the counters are kept — the individual timings are discarded as they arrive.
+
+Here is the full ladder, holding the counters behind the 500-request run shown in
+[Quick start](#quick-start). These are internal counts, not printed output:
+
+```
+  bucket       count
+  <1ms             0
+  1–2ms           40   ████
+  2–5ms          260   ██████████████████████████
+  5–10ms         155   ███████████████
+  10–20ms         30   ███
+  20–50ms          6   ▌
+  50–100ms         3   ▎
+  100–200ms        5   ▌
+  200–500ms        1   ▏
+  500ms–1s         0
+  1–2s             0
+  2–5s             0
+  5–10s            0
+  ≥10s             0
+```
+
+Buckets are half-open: `[1ms, 2ms)` includes exactly 1ms and excludes 2ms. Every latency
+therefore lands in exactly one bucket, and the counts always sum to the number of successful
+requests — no gaps, no double counting.
+
+The ladder is multiplicative rather than evenly spaced, each bucket roughly 2–2.5× the width
+of the last. Latency is skewed, exactly as the counts above show: most requests cluster at the
+low end while the interesting tail stretches across orders of magnitude. Fixed-width buckets
+would drop nearly everything into the first one and spend the rest on an empty tail.
+
+A percentile is then read by walking the buckets from fastest to slowest, accumulating counts
+until the target rank is reached, then reporting that bucket's upper bound. For `P90` above,
+the rank is `0.9 × 500 = 450`; the running total passes it in `5–10ms` (40 + 260 + 155 = 455),
+so `P90` reports `10ms`.
+
+The trade-off is memory for precision. Memory is constant — 14 counters no matter what `-n`
+is, so two million requests cost the same as ten — but a percentile is only known to the
+width of the bucket it lands in.
 
 ## Exit codes
 
@@ -153,7 +200,7 @@ Full API documentation:
 
 ## Known limitations
 
-Honest about what v0.1.0 does not do yet. Each of these is planned work, not a mystery.
+Honest about what v0.2.0 does not do yet. Each of these is planned work, not a mystery.
 
 - **Only bearer-token auth.** `-token` sends an `Authorization: Bearer …` header, and that's
   the only header you can set. An API key that belongs in a custom header — `X-API-Key`,
@@ -163,9 +210,11 @@ Honest about what v0.1.0 does not do yet. Each of these is planned work, not a m
 - **A malformed URL is not rejected up front.** `-url nope` passes validation, every request
   then fails the same way, and the tool still exits `0`. Check the summary, not just `$?`,
   until this is fixed.
-- **Memory still grows with `-n`.** Only successful-request latencies are retained, about
-  60 MB at 2 million requests; failed requests are counted, not stored. Fine for typical runs;
-  plan around it for tens of millions.
+- **Percentiles are bucketed, not exact.** Latencies are counted into a fixed ladder of
+  buckets — `<1ms`, `1–2ms`, `2–5ms`, `5–10ms`, and so on up to `≥10s` — so a reported
+  percentile is the upper bound of its bucket and can overstate the true latency by up to
+  about 2.5×. Precision is also capped by `-n`: percentiles resolve only in steps of `1/n`,
+  so a p99 from a 100-request run rests on a single observation.
 - **Secrets on the command line are visible** in your shell history and to anyone who can run
   `ps` while the test is running. This covers `-token`, and equally a key embedded in `-url`.
   Prefer a shell variable that you clear afterwards.
@@ -178,7 +227,7 @@ Honest about what v0.1.0 does not do yet. Each of these is planned work, not a m
 
 ## Roadmap
 
-v0.2 adds multi-endpoint runs driven by a JSON file — several requests in one run, grouped
+v0.3 adds multi-endpoint runs driven by a JSON file — several requests in one run, grouped
 into separate summaries, sharing one bounded worker pool. The design and its trade-offs are
 written up in [docs/MULTI_ENDPOINT_DESIGN.md](docs/MULTI_ENDPOINT_DESIGN.md).
 

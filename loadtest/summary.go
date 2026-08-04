@@ -25,8 +25,10 @@ const (
 //
 // Total counts completed request attempts, so it can be less than Config.Requests
 // after cancellation. Elapsed is the wall-clock run duration. Throughput is
-// successful requests per second. P50, P90, and P99 are nearest-rank latencies
-// calculated from successful requests only.
+// successful requests per second. P50, P90, and P99 are latency percentiles over
+// successful requests only. Latencies are counted into a fixed bucket ladder
+// rather than retained, so each percentile is the upper bound of the bucket it
+// falls into and can overstate the true latency.
 //
 // Errors maps stable failure categories and HTTP server-error descriptions to
 // their occurrence counts. Request failures are classified as request timeout,
