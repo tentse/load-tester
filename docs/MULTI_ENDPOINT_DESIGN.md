@@ -113,32 +113,61 @@ percentiles are computed over successful requests only.
 This is what makes authentication testing expressible: an entry with an expired token and
 `"expectStatus": 401` asserts that rejection keeps working under load.
 
-### 6. Credentials are named and selected per request
+### 6. Credentials are plain headers with `${ENV}` substitution
 
-`tokens` is a top-level map of name → token value. Entries select one with `"token": "<name>"`.
-The default is **no credential sent**.
+There is **no `token` field and no `tokens` map**. Authentication is expressed as a header, and
+secrets come from the environment via `${ENV_VAR}`, resolved once at load time. The default is
+**no credential sent**.
 
-Rejected alternative: a global `defaults.headers.Authorization`. It cannot express what users
-actually need — several identities in one run: valid vs expired vs fake vs privileged, all
-against the same endpoints.
+```json
+{ "name": "orders", "url": "/orders",
+  "headers": { "Authorization": "Bearer ${USER_TOKEN}" } }
 
-Rejected alternative: a literal token string per entry. A JWT is 500–800 characters; repeating
-one across 30 entries produces an unreadable file, unreviewable diffs, and 30 copies of a secret
-in a file destined for version control.
+{ "name": "search", "url": "/search",
+  "headers": { "X-API-Key": "${API_KEY}" } }
+```
 
-Named references give per-request selection *and* one declaration per secret:
+An earlier revision of this document specified a `tokens` map with a `token` field selecting
+from it. That was the right shape **while `${ENV}` was scoped to `tokens` values only** — it was
+then the single place a secret could be named and pulled from the environment. Extending
+substitution to header values, which API-key auth forces, made the map a second way to do what
+`headers` already does. So it was removed.
 
-- Real values come from the environment via `${ENV_VAR}`, resolved once at load. They never
-  appear in the file.
-- Deliberately-invalid values (`"fake": "not-a-real-token"`) are safe to commit literally.
-- Entries read as intent — `"token": "expired"` says what the test means; a raw JWT says nothing.
-- An unknown name is caught before any request fires.
+**Why a dedicated field cannot cover API keys.** `Authorization: Bearer <v>` has exactly one
+canonical form, so the tool can supply both the header name and the prefix. API keys have no
+standard — `X-API-Key`, `apikey`, `X-Api-Key`, and `Ocp-Apim-Subscription-Key` are all in the
+wild. Any dedicated field would need a name *and* a value, at which point it is a header.
 
-**`token` is always a name from `tokens`, never a literal.** Allowing both would make
-`"token": "admin"` ambiguous. Want a literal? Declare it in `tokens` and reference it.
+What the single mechanism buys:
 
-`${ENV_VAR}` substitution is scoped to `tokens` values only. It resolves once at load time and
-is not per-request templating, so it does not breach the stateless boundary.
+- **No precedence rule.** Issue #7 carries one — *"a nonempty token overrides any custom
+  `Authorization` value"* — that exists only because two mechanisms compete for one header. One
+  mechanism, nothing to document or test.
+- **Bearer stops being privileged.** The same field handles API keys, subscription keys, and
+  whatever scheme appears next, with no second map.
+- **The file shows what goes on the wire.** `"token": "user"` requires knowing the tool prepends
+  `Bearer `. The header form has no hidden step.
+
+Multi-identity testing is unaffected: valid, expired, and deliberately-invalid credentials are
+just different header values, and a literal fake (`"Bearer not-a-real-token"`) is safe to commit.
+
+**Substitution is scoped to header values and `url`. Never `body`.** A JSON payload can
+legitimately contain `${...}` — an endpoint that itself processes template strings, for example —
+and silently substituting inside it would corrupt the request. Headers and URLs realistically
+never contain that sequence by accident.
+
+The `url` case exists for the second API-key pattern: keys passed as query parameters. Without
+substitution, `/search?api_key=abc123` puts a live secret in a file destined for version
+control; with it, `/search?api_key=${API_KEY}` does not.
+
+**Docs must state the query-parameter risk.** A key in a query string is recorded by the target
+server's access logs, by every proxy in between, and by any APM watching. Nothing this tool can
+prevent — its own error keys already strip query values — but it makes the pattern easy to reach
+for, so the trade-off belongs in the human quickstart.
+
+The verbosity cost is real: thirty entries sharing one credential means thirty copies of the
+same header object. See decision 8 — that is exactly what a `defaults` block would fix, and it
+can be added later without breaking a single existing file.
 
 ### 7. `body` takes a real JSON value, not an escaped string
 
@@ -181,17 +210,25 @@ func bodyBytes(raw json.RawMessage) ([]byte, error) {
 for the same runtime field. Files are read once at startup, not on first use, so a missing file
 fails the run before any load is generated.
 
-### 8. No `defaults` block
+### 8. No `defaults` block — for now
 
-Considered and dropped. Its only substantial use was a shared `Authorization` header, and
-decision 6 removed that. What remained (`Accept-Language`, `X-Request-Source`) is rare enough to
-write on the entries that need it.
+Considered and dropped for v0.3. Dropping it deletes two rules from the format — per-key merge,
+and a `null` sentinel to remove an inherited key — and keeps every entry fully self-describing
+when read in isolation.
 
-Dropping it also deletes two rules from the format — per-key merge, and a `null` sentinel to
-remove an inherited key — and keeps every entry fully self-describing when read in isolation.
+**This is the decision most likely to be revisited.** Decision 6 moved credentials into
+`headers`, so a file where thirty entries share one token now repeats that header object thirty
+times. That is the same tedium argument that ruled out literal per-entry tokens in the first
+place. It is deliberately left unsolved until it actually bites, on the grounds that:
 
-It is safe to reintroduce later: a file with no `defaults` key stays valid the day one is added.
-Contrast `version`, which cannot be retrofitted.
+- a file with no `defaults` key stays valid the day one is introduced, so nothing about omitting
+  it now constrains the format later, and
+- the `null`-removes-a-key rule only earns its complexity once there is something to opt out of.
+  Entries like `orders-noauth`, which must send *no* credential, are precisely what would need
+  it.
+
+Contrast `version`, which cannot be retrofitted at all. The general rule when trimming this
+schema: cut what is additive later, keep what is not.
 
 ---
 
@@ -209,41 +246,41 @@ A representative instance:
   "concurrency": 50,
   "timeout": "30s",
 
-  "tokens": {
-    "user":    "${USER_TOKEN}",
-    "admin":   "${ADMIN_TOKEN}",
-    "expired": "${EXPIRED_TOKEN}",
-    "fake":    "not-a-real-token"
-  },
-
   "requests": [
     { "name": "search", "url": "/search?q=foo",
-      "token": "user", "count": 40, "expectStatus": 200 },
+      "headers": { "X-API-Key": "${API_KEY}" },
+      "count": 40, "expectStatus": 200 },
 
     { "name": "search", "url": "/search?q=bar",
-      "token": "user", "count": 10, "expectStatus": 200 },
+      "headers": { "X-API-Key": "${API_KEY}" },
+      "count": 10, "expectStatus": 200 },
 
     { "name": "ingest-order", "method": "POST", "url": "/orders",
       "body": { "sku": "A-100", "qty": 2 },
-      "token": "user", "count": 500, "expectStatus": 201 },
+      "headers": { "Authorization": "Bearer ${USER_TOKEN}" },
+      "count": 500, "expectStatus": 201 },
 
     { "name": "bulk-import", "method": "POST", "url": "/orders/bulk",
       "bodyFile": "./payloads/bulk-order.json",
-      "token": "admin", "count": 20, "expectStatus": 202 },
+      "headers": { "Authorization": "Bearer ${ADMIN_TOKEN}" },
+      "count": 20, "expectStatus": 202 },
 
     { "name": "update-user", "method": "PUT", "url": "/users/1001",
       "body": { "tier": "gold", "name": "someone" },
-      "headers": { "X-Reason": "load-test" },
-      "token": "admin", "count": 200, "expectStatus": 200 },
+      "headers": { "Authorization": "Bearer ${ADMIN_TOKEN}",
+                   "X-Reason": "load-test" },
+      "count": 200, "expectStatus": 200 },
 
     { "name": "delete-user", "method": "DELETE", "url": "/users/2001",
-      "token": "admin", "expectStatus": 204 },
+      "headers": { "Authorization": "Bearer ${ADMIN_TOKEN}" },
+      "expectStatus": 204 },
 
     { "name": "orders-noauth", "url": "/orders",
       "count": 20, "expectStatus": 401 },
 
     { "name": "orders-expired", "url": "/orders",
-      "token": "expired", "count": 20, "expectStatus": 401 }
+      "headers": { "Authorization": "Bearer ${EXPIRED_TOKEN}" },
+      "count": 20, "expectStatus": 401 }
   ]
 }
 ```
@@ -261,7 +298,6 @@ Produces **7 summaries from 811 requests**: `search` 50 (two variants merged), `
 | `baseUrl` | string, optional | Prefix for relative entry URLs. |
 | `concurrency` | int, required | Workers **total**, shared across all names. |
 | `timeout` | duration, required | Per request, not per run. |
-| `tokens` | map, optional | Named credentials. `${ENV}` resolved at load. |
 
 ### Per-request fields
 
@@ -272,8 +308,7 @@ Produces **7 summaries from 811 requests**: `search` 50 (two variants merged), `
 | `method` | string, optional | Defaults to `GET`. |
 | `body` | object/array/string, optional | Sent verbatim. Excludes `bodyFile`. |
 | `bodyFile` | string, optional | Path, read once at startup. Excludes `body`. |
-| `headers` | map, optional | Sent as written. |
-| `token` | string, optional | Name from `tokens`. Default: no credential sent. |
+| `headers` | map, optional | Sent as written. `${ENV}` resolved at load. Carries credentials. |
 | `count` | int, optional | Defaults to 1. Warns if raised on DELETE. |
 | `expectStatus` | int, optional | Mismatch is a failure, not a success. |
 
@@ -286,8 +321,9 @@ below runs during load, before a single request is sent:
 
 1. `version` is `1`; `concurrency` and `timeout` are greater than zero.
 2. Every `url` parses and has a host **after** `baseUrl` resolution.
-3. Every `token` names a key present in `tokens`.
-4. Every `${ENV_VAR}` referenced in `tokens` is set in the environment.
+3. Every `${ENV_VAR}` referenced in a header value or `url` is **set** in the environment —
+   set-but-empty is allowed, undefined is not.
+4. Header names are non-empty, contain no CR/LF, and canonicalize through `net/http`.
 5. `body` and `bodyFile` are never both present on one entry.
 6. Every `bodyFile` opens and reads successfully.
 7. `count` is at least 1; `expectStatus` is in 100–599.
@@ -295,7 +331,7 @@ below runs during load, before a single request is sent:
 Errors are **positional and precise**:
 
 ```
-requests[3].token "expierd" is not defined in tokens
+requests[2].headers["X-API-Key"] references undefined environment variable API_KEYY
 requests[0].url has no host
 ```
 
@@ -329,13 +365,13 @@ The current single-target engine assumes one URL/method/body, so v0.3 touches:
 
   ```go
   type requestSpec struct {          // wire format, exists only during load
-      Name     string          `json:"name"`
-      URL      string          `json:"url"`
-      Method   string          `json:"method"`
-      Body     json.RawMessage `json:"body"`
-      BodyFile string          `json:"bodyFile"`
-      Token    string          `json:"token"`
-      Count    int             `json:"count"`
+      Name     string            `json:"name"`
+      URL      string            `json:"url"`
+      Method   string            `json:"method"`
+      Body     json.RawMessage   `json:"body"`
+      BodyFile string            `json:"bodyFile"`
+      Headers  map[string]string `json:"headers"`
+      Count    int               `json:"count"`
   }
 
   type job struct {                  // what workers consume
@@ -348,10 +384,41 @@ The current single-target engine assumes one URL/method/body, so v0.3 touches:
   }
   ```
 
-  Loading is the function that turns N specs into M jobs: resolve `baseUrl`, look up the token,
-  normalize `body`/`bodyFile` into one `[]byte`, expand by `count`. Workers never touch a JSON
-  concern, and `body` vs `bodyFile` collapses to one field — which is precisely why they are
-  mutually exclusive.
+  Loading is the function that turns N specs into M jobs: resolve `baseUrl`, expand `${ENV}` in
+  header values and the URL, normalize `body`/`bodyFile` into one `[]byte`, expand by `count`.
+  Workers never touch a JSON concern, never see a `${...}` placeholder, and `body` vs `bodyFile`
+  collapses to one field — which is precisely why they are mutually exclusive.
+
+- **`${ENV}` expansion needs `os.LookupEnv`, not `os.ExpandEnv`.** The obvious stdlib reach is
+  wrong twice over: `os.ExpandEnv` substitutes empty for undefined variables, so a typo'd
+  `${API_KEYY}` would silently send an empty header rather than failing; and it also expands
+  bare `$VAR`, which is a hazard in URLs that legitimately contain `$`. A small regexp restricted
+  to `${NAME}` gives exact semantics and fail-fast:
+
+  ```go
+  var envRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+  func expandEnv(field, s string) (string, error) {
+      var missing []string
+      out := envRef.ReplaceAllStringFunc(s, func(m string) string {
+          name := envRef.FindStringSubmatch(m)[1]
+          v, ok := os.LookupEnv(name)
+          if !ok {
+              missing = append(missing, name)
+              return ""
+          }
+          return v
+      })
+      if len(missing) > 0 {
+          return "", fmt.Errorf("%s references undefined environment variable %s",
+              field, strings.Join(missing, ", "))
+      }
+      return out, nil
+  }
+  ```
+
+  `os.LookupEnv` rather than `os.Getenv` is what distinguishes *unset* from *set to empty* — the
+  difference between a caught misconfiguration and a silent one.
 
 - **`jobs` channel carries the job, not `struct{}{}`.** Today every job is identical;
   multi-endpoint jobs must say *which* request to fire.
