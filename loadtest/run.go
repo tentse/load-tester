@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 )
@@ -20,7 +21,7 @@ type Config struct {
 	Requests    int
 	Timeout     time.Duration
 	Method      string
-	Token       string
+	Headers     http.Header
 	Body        string
 }
 
@@ -122,7 +123,7 @@ func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, job
 				return
 			}
 			start := time.Now()
-			status, err := r.hit(ctx, cfg.Method, cfg.URL, cfg.Token, cfg.Body)
+			status, err := r.hit(ctx, cfg.Method, cfg.URL, cfg.Body, cfg.Headers)
 			statusTracker.IncTotal()
 			if err != nil || isServerError(status) {
 				statusTracker.IncFailed()

@@ -41,7 +41,7 @@ func newClient(timeout time.Duration) *http.Client {
 	}
 }
 
-func (r *runner) hit(ctx context.Context, httpMethod, targetURL, token, reqBody string) (int, error) {
+func (r *runner) hit(ctx context.Context, httpMethod, targetURL, reqBody string, headers http.Header) (int, error) {
 	var body io.Reader
 	if reqBody != "" {
 		body = strings.NewReader(reqBody)
@@ -52,11 +52,14 @@ func (r *runner) hit(ctx context.Context, httpMethod, targetURL, token, reqBody 
 		return 0, fmt.Errorf("build %s %s: %w", httpMethod, targetURL, err)
 	}
 
-	if reqBody != "" {
-		req.Header.Set(headerContentType, contentTypeJSON)
+	for name, values := range headers {
+		for _, v := range values {
+			req.Header.Add(name, v)
+		}
 	}
-	if token != "" {
-		req.Header.Set(headerAuth, bearerPrefix+token)
+
+	if reqBody != "" && req.Header.Get(headerContentType) == "" {
+		req.Header.Set(headerContentType, contentTypeJSON)
 	}
 
 	resp, err := r.client.Do(req)

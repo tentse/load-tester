@@ -207,7 +207,7 @@ func TestHitSendsRequest(t *testing.T) {
 			defer mockServer.Close()
 
 			r := newRunner(tc.timeout)
-			got, err := r.hit(t.Context(), tc.httpMethod, mockServer.URL, tc.headers, tc.reqBody)
+			got, err := r.hit(t.Context(), tc.httpMethod, mockServer.URL, tc.reqBody, tc.headers)
 
 			if err != nil {
 				t.Fatalf("hit() error = %v, want nil", err)
@@ -226,7 +226,7 @@ func TestServerNotReachableError(t *testing.T) {
 	mockServer.Close()
 
 	r := newRunner(defaultTimeout)
-	_, err := r.hit(t.Context(), http.MethodGet, url, "", "")
+	_, err := r.hit(t.Context(), http.MethodGet, url, "", http.Header{})
 	if err == nil {
 		t.Error("hitting a closed server: want error, got nil")
 	}
@@ -238,7 +238,7 @@ func TestHitURLError(t *testing.T) {
 	url := "%"
 
 	r := newRunner(defaultTimeout)
-	_, err := r.hit(t.Context(), http.MethodGet, url, "", "")
+	_, err := r.hit(t.Context(), http.MethodGet, url, "", http.Header{})
 
 	if err == nil {
 		t.Error("providing false URL: want error, got nil")
@@ -254,7 +254,7 @@ func TestRequestTimeout(t *testing.T) {
 
 	timeout := 10 * time.Millisecond
 	r := newRunner(timeout)
-	got, err := r.hit(t.Context(), http.MethodGet, mockServer.URL, "", "")
+	got, err := r.hit(t.Context(), http.MethodGet, mockServer.URL, "", http.Header{})
 
 	if err == nil {
 		t.Error("expected timeout error, overwaited for the server response")
@@ -281,7 +281,7 @@ func TestContextCancellation(t *testing.T) {
 	finished := make(chan error, 1)
 	go func() {
 		r := newRunner(defaultTimeout)
-		_, err := r.hit(ctx, http.MethodGet, mockServer.URL, "", "")
+		_, err := r.hit(ctx, http.MethodGet, mockServer.URL, "", http.Header{})
 		finished <- err
 	}()
 
@@ -340,7 +340,7 @@ func TestResponseBodyError(t *testing.T) {
 
 	r := newRunner(defaultTimeout)
 
-	_, err := r.hit(t.Context(), http.MethodGet, mockServer.URL, "", "")
+	_, err := r.hit(t.Context(), http.MethodGet, mockServer.URL, "", http.Header{})
 
 	if err == nil {
 		t.Fatal("hit() error = nil, want body-read error")

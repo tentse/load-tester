@@ -52,7 +52,7 @@ func parseConfig(args []string, stderr io.Writer) (loadtest.Config, error) {
 		Concurrency: *concurrency,
 		Requests:    *requests,
 		Method:      *method,
-		Token:       *token,
+		Headers:     *headers,
 		Body:        *body,
 		Timeout:     *timeout,
 	}, nil

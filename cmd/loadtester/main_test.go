@@ -7,6 +7,7 @@ import (
 	"flag"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -117,15 +118,13 @@ func TestParseConfigDefaultValues(t *testing.T) {
 		Requests:    20,
 		Timeout:     1 * time.Second,
 		Method:      http.MethodGet,
-		Token:       "",
-		Body:        "",
 	}
 	var stderr bytes.Buffer
 	got, err := parseConfig(args, &stderr)
 	if err != nil {
 		t.Fatalf("parseConfig() unexpected error = %v", err)
 	}
-	if want != got {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("parseConfig() got = %v, want = %v", got, want)
 	}
 }
@@ -193,16 +192,19 @@ func TestParseConfigAllValues(t *testing.T) {
 		Concurrency: 12,
 		Requests:    250,
 		Method:      http.MethodPost,
-		Token:       "token",
-		Body:        `{"body": "some body"}`,
-		Timeout:     500 * time.Millisecond,
+		Headers: http.Header{
+			"Authorization": {"Bearer token"},
+			"Content-Type":  {"application/json"},
+		},
+		Body:    `{"body": "some body"}`,
+		Timeout: 500 * time.Millisecond,
 	}
 	var stderr bytes.Buffer
 	got, err := parseConfig(args, &stderr)
 	if err != nil {
 		t.Fatalf("parseConfig err = %q, want = nil", err)
 	}
-	if want != got {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("parseConfig() got = %v, want = %v", got, want)
 	}
 }
