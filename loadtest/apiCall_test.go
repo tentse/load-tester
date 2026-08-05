@@ -6,18 +6,19 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 )
 
 type hitCase struct {
-	name       string
-	timeout    time.Duration
-	httpMethod string
-	token      string
-	wantAuth   string
-	reqBody    string
-	mockStatus int
+	name        string
+	timeout     time.Duration
+	httpMethod  string
+	headers     http.Header
+	wantHeaders http.Header
+	reqBody     string
+	mockStatus  int
 }
 
 func assertEqual[T comparable](t *testing.T, field string, got, want T) {
@@ -37,7 +38,12 @@ func assertPositiveStats(t *testing.T, field string, got float64) {
 func checkRequest(t *testing.T, tc hitCase) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		assertEqual(t, "method", r.Method, tc.httpMethod)
-		assertEqual(t, "authorization", r.Header.Get("Authorization"), tc.wantAuth)
+
+		for name, want := range tc.wantHeaders {
+			if got := r.Header.Values(name); !slices.Equal(got, want) {
+				t.Errorf("header %q = %v, want %v", name, got, want)
+			}
+		}
 
 		if tc.reqBody != "" {
 			body, err := io.ReadAll(r.Body)
@@ -47,9 +53,6 @@ func checkRequest(t *testing.T, tc hitCase) http.HandlerFunc {
 				return
 			}
 			assertEqual(t, "body", string(body), tc.reqBody)
-			assertEqual(t, "content-type", r.Header.Get("Content-Type"), "application/json")
-		} else if got := r.Header.Get("Content-Type"); got != "" {
-			t.Errorf("reqBody empty but content type present = %q", got)
 		}
 		w.WriteHeader(tc.mockStatus)
 	}
@@ -62,8 +65,13 @@ func TestHitSendsRequest(t *testing.T) {
 			name:       "GET with token",
 			httpMethod: http.MethodGet,
 			timeout:    defaultTimeout,
-			token:      "token",
-			wantAuth:   "Bearer token",
+			headers: http.Header{
+				"Authorization": {"Bearer token"},
+			},
+			wantHeaders: http.Header{
+				"Authorization": {"Bearer token"},
+				"Content-Type":  nil,
+			},
 			reqBody:    "",
 			mockStatus: http.StatusOK,
 		},
@@ -71,17 +79,37 @@ func TestHitSendsRequest(t *testing.T) {
 			name:       "GET, 500 passed through status",
 			httpMethod: http.MethodGet,
 			timeout:    defaultTimeout,
-			token:      "",
-			wantAuth:   "",
+			headers:    http.Header{},
+			wantHeaders: http.Header{
+				"Content-Type": nil,
+			},
 			reqBody:    "",
 			mockStatus: http.StatusInternalServerError,
+		},
+		{
+			name:       "GET without headers sends no content type",
+			httpMethod: http.MethodGet,
+			timeout:    defaultTimeout,
+			headers:    http.Header{},
+			wantHeaders: http.Header{
+				"Content-Type":  nil,
+				"Authorization": nil,
+			},
+			reqBody:    "",
+			mockStatus: http.StatusOK,
 		},
 		{
 			name:       "POST with token and body",
 			httpMethod: http.MethodPost,
 			timeout:    defaultTimeout,
-			token:      "token",
-			wantAuth:   "Bearer token",
+			headers: http.Header{
+				"Authorization": {"Bearer token"},
+				"Content-Type":  {"application/json"},
+			},
+			wantHeaders: http.Header{
+				"Authorization": {"Bearer token"},
+				"Content-Type":  {"application/json"},
+			},
 			reqBody:    `{"body":"hi"}`,
 			mockStatus: http.StatusCreated,
 		},
@@ -89,8 +117,13 @@ func TestHitSendsRequest(t *testing.T) {
 			name:       "POST with token, no body",
 			httpMethod: http.MethodPost,
 			timeout:    defaultTimeout,
-			token:      "token",
-			wantAuth:   "Bearer token",
+			headers: http.Header{
+				"Authorization": {"Bearer token"},
+			},
+			wantHeaders: http.Header{
+				"Authorization": {"Bearer token"},
+				"Content-Type":  nil,
+			},
 			reqBody:    "",
 			mockStatus: http.StatusCreated,
 		},
@@ -98,8 +131,13 @@ func TestHitSendsRequest(t *testing.T) {
 			name:       "POST no token, with body",
 			httpMethod: http.MethodPost,
 			timeout:    defaultTimeout,
-			token:      "",
-			wantAuth:   "",
+			headers: http.Header{
+				"Content-Type": {"application/json"},
+			},
+			wantHeaders: http.Header{
+				"Authorization": nil,
+				"Content-Type":  {"application/json"},
+			},
 			reqBody:    `{"body":"hi"}`,
 			mockStatus: http.StatusCreated,
 		},
@@ -107,10 +145,58 @@ func TestHitSendsRequest(t *testing.T) {
 			name:       "POST no token, no body",
 			httpMethod: http.MethodPost,
 			timeout:    defaultTimeout,
-			token:      "",
-			wantAuth:   "",
+			headers:    http.Header{},
+			wantHeaders: http.Header{
+				"Authorization": nil,
+				"Content-Type":  nil,
+			},
 			reqBody:    "",
 			mockStatus: http.StatusCreated,
+		},
+		{
+			name:       "POST with body and no content type gets json default",
+			httpMethod: http.MethodPost,
+			timeout:    defaultTimeout,
+			headers:    http.Header{},
+			reqBody:    `{"body":"hi"}`,
+			wantHeaders: http.Header{
+				"Content-Type": {"application/json"},
+			},
+			mockStatus: http.StatusCreated,
+		},
+		{
+			name:       "explicit content type overrides json default",
+			httpMethod: http.MethodPost,
+			timeout:    defaultTimeout,
+			headers:    http.Header{"Content-Type": {"application/xml"}},
+			reqBody:    "<order/>",
+			wantHeaders: http.Header{
+				"Content-Type": {"application/xml"},
+			},
+			mockStatus: http.StatusCreated,
+		},
+		{
+			name:        "repeated header keeps input order",
+			httpMethod:  http.MethodGet,
+			timeout:     defaultTimeout,
+			headers:     http.Header{"X-Tag": {"a", "b"}},
+			wantHeaders: http.Header{"X-Tag": {"a", "b"}},
+			mockStatus:  http.StatusOK,
+		},
+		{
+			name:       "custom headers pass through untouched",
+			httpMethod: http.MethodGet,
+			timeout:    defaultTimeout,
+			headers: http.Header{
+				"X-API-Key": {"secret"},
+				"X-Reason":  {"load-test"},
+			},
+			wantHeaders: http.Header{
+				"X-API-Key":     {"secret"},
+				"X-Reason":      {"load-test"},
+				"Authorization": nil,
+			},
+			mockStatus: http.StatusOK,
 		},
 	}
 
@@ -121,7 +207,7 @@ func TestHitSendsRequest(t *testing.T) {
 			defer mockServer.Close()
 
 			r := newRunner(tc.timeout)
-			got, err := r.hit(t.Context(), tc.httpMethod, mockServer.URL, tc.token, tc.reqBody)
+			got, err := r.hit(t.Context(), tc.httpMethod, mockServer.URL, tc.headers, tc.reqBody)
 
 			if err != nil {
 				t.Fatalf("hit() error = %v, want nil", err)
