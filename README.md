@@ -254,9 +254,9 @@ Honest about what the tool does not do yet. Each of these is planned work, not a
 
 ## Roadmap
 
-v0.3 adds multi-endpoint runs driven by a JSON file — several requests in one run, grouped
-into separate summaries, sharing one bounded worker pool. The design and its trade-offs are
-written up in [docs/MULTI_ENDPOINT_DESIGN.md](docs/MULTI_ENDPOINT_DESIGN.md).
+The next major feature is multi-endpoint runs driven by a JSON file — several requests in one
+run, grouped into separate summaries, sharing one bounded worker pool. The design and its
+trade-offs are written up in [docs/MULTI_ENDPOINT_DESIGN.md](docs/MULTI_ENDPOINT_DESIGN.md).
 
 ## Development
 

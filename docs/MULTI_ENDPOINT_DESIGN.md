@@ -1,12 +1,13 @@
-# Design notes: multi-endpoint JSON load tests (v0.3)
+# Design notes: multi-endpoint JSON load tests (v0.4)
 
 **Status:** proposal / design record. Nothing here is implemented. This is the agreed shape
-for the milestone *after* `v0.2.0` (bounded-memory latency aggregation, released 2026-08-04).
+for the milestone *after* `v0.3.0` (custom request headers, released 2026-08-06).
 
-> Originally written targeting v0.2. That number went to the histogram release, so this work
-> is now v0.3 and the README roadmap says so.
+> The version number has moved twice: this was written targeting v0.2, which went to the
+> bounded-memory histogram release, then v0.3, which went to custom request headers. It is now
+> v0.4. The README roadmap deliberately no longer names a version, so it cannot drift again.
 
-**Scope boundary (hard):** v0.3 stays **stateless and fire-and-forget**, exactly like today's
+**Scope boundary (hard):** v0.4 stays **stateless and fire-and-forget**, exactly like today's
 engine. No value templating, no response capture, no request chaining, no ordered phases. Those
 are deliberately *out of scope* — see "Explicitly out of scope" at the bottom.
 
@@ -212,7 +213,7 @@ fails the run before any load is generated.
 
 ### 8. No `defaults` block — for now
 
-Considered and dropped for v0.3. Dropping it deletes two rules from the format — per-key merge,
+Considered and dropped for v0.4. Dropping it deletes two rules from the format — per-key merge,
 and a `null` sentinel to remove an inherited key — and keeps every entry fully self-describing
 when read in isolation.
 
@@ -239,7 +240,7 @@ A representative instance:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/tentse/load-tester/v0.3.0/schema/requests.schema.json",
+  "$schema": "https://raw.githubusercontent.com/tentse/load-tester/v0.4.0/schema/requests.schema.json",
   "version": 1,
 
   "baseUrl": "https://staging.example.com",
@@ -358,7 +359,7 @@ the "do not use silent precedence" decision already made for safe token sources.
 
 ## Implementation implications (for when this is built — not now)
 
-The current single-target engine assumes one URL/method/body, so v0.3 touches:
+The current single-target engine assumes one URL/method/body, so v0.4 touches:
 
 - **Two types, not one.** The struct that mirrors the file is a *parsing* concern; the struct the
   queue carries is a *runtime* concern. Keep `json.RawMessage` out of the second one.
@@ -427,17 +428,16 @@ The current single-target engine assumes one URL/method/body, so v0.3 touches:
   fold into a `map[string]Summary` (or `[]NamedSummary`) keyed by name. One `latencyHistogram`
   per name — the type is already a self-contained value with no global state, so this composes.
 
-- **The public result type becomes a collection** of named summaries. This is a v0.3 API
+- **The public result type becomes a collection** of named summaries. This is a v0.4 API
   addition — design it alongside, don't retrofit the single `Summary` awkwardly.
 
 - **Success classification moves.** It is currently `status < 500`; it becomes "matches
   `expectStatus` when set, else `status < 500`".
 
-**Prerequisite:** custom request headers (issue #7) must land first or alongside. This schema
-references `headers`, which the engine does not support yet.
-
-**No longer a prerequisite:** streaming aggregation shipped in `v0.2.0`, and error-key
-normalization is closed. Both were listed as blockers in the original version of this document.
+**No remaining prerequisites.** Every blocker listed in the original version of this document
+is now closed: streaming aggregation shipped in `v0.2.0`, custom request headers (issue #7)
+shipped in `v0.3.0` — so the `headers` key this schema references is already supported by the
+engine — and error-key normalization is done.
 
 ---
 
@@ -497,7 +497,7 @@ breach statelessness the way full templating would.
 
 ---
 
-## Explicitly out of scope (do not build in v0.3)
+## Explicitly out of scope (do not build in v0.4)
 
 - Value templating (`{{seq}}` / `{{uuid}}` in url/body).
 - Response-body capture / JSON-path extraction.
@@ -506,7 +506,7 @@ breach statelessness the way full templating would.
 
 These only become necessary for the *server-assigns-the-id* seeding case, and the
 "seed outside the tool with known IDs" decision above removes that need. Revisit only if a
-concrete requirement forces it after v0.3.
+concrete requirement forces it after v0.4.
 
 ---
 
