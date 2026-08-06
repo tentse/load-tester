@@ -70,16 +70,39 @@ you still get a summary of everything that completed.
 | `-n` | `20` | Total number of requests to send |
 | `-method` | `GET` | HTTP method |
 | `-timeout` | `1s` | Per-request timeout, including reading the response body |
-| `-token` | *(empty)* | Bearer token, sent as an `Authorization` header |
-| `-body` | *(empty)* | Request body, sent as `application/json` |
+| `-H` | *(none)* | Custom request header as `"Name: Value"`. Repeatable — pass it once per header |
+| `-body` | *(empty)* | Request body. Sets `Content-Type: application/json` unless you set that header yourself |
 
 ```sh
 loadtester -url https://api.example.internal/users \
   -method POST \
   -body '{"name":"test"}' \
-  -token "$API_TOKEN" \
+  -H "Authorization: Bearer $API_TOKEN" \
   -c 50 -n 1000 -timeout 5s
 ```
+
+### Headers
+
+`-H` takes any header, so authentication is whatever your API expects rather than a fixed
+scheme — a bearer token, an API key under whatever name your service uses, or both:
+
+```sh
+loadtester -url https://api.example.internal/orders \
+  -H "X-API-Key: $API_KEY" \
+  -H "X-Request-Source: load-test"
+```
+
+Repeating the same name sends the header more than once, in the order given:
+
+```sh
+loadtester -url https://api.example.internal/search -H "X-Tag: a" -H "X-Tag: b"
+```
+
+A malformed header — no colon, an empty name, or a newline in either field — is rejected
+before a single request is sent, and the run exits `2`.
+
+Keep credentials out of your shell history: prefer a variable you clear afterwards, since
+anything on the command line is visible to `ps` while the run is in progress.
 
 ## Understanding the output
 
@@ -169,6 +192,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/tentse/load-tester/loadtest"
@@ -181,6 +205,9 @@ func main() {
 		Concurrency: 10,
 		Requests:    100,
 		Timeout:     time.Second,
+		Headers: http.Header{
+			"X-API-Key": {"secret"},
+		},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -200,29 +227,28 @@ Full API documentation:
 
 ## Known limitations
 
-Honest about what v0.2.0 does not do yet. Each of these is planned work, not a mystery.
+Honest about what the tool does not do yet. Each of these is planned work, not a mystery.
 
-- **Only bearer-token auth.** `-token` sends an `Authorization: Bearer …` header, and that's
-  the only header you can set. An API key that belongs in a custom header — `X-API-Key`,
-  `apikey`, and friends — can't be sent at all. If your API takes the key as a query
-  parameter, you can include it in `-url`; failure summaries do not print query values.
-  The command-line exposure described below still applies.
-- **A malformed URL is not rejected up front.** `-url nope` passes validation, every request
-  then fails the same way, and the tool still exits `0`. Check the summary, not just `$?`,
-  until this is fixed.
+- **Configuration errors are reported as target failures.** A malformed URL (`-url nope`) or
+  an unusable method is caught by Go's HTTP client, not by validation — so no request ever
+  leaves your machine, yet the summary blames the target with `request failed` and the tool
+  still exits `0`. Check the summary, not just `$?`, and suspect your own flags first when
+  every request fails identically.
 - **Percentiles are bucketed, not exact.** Latencies are counted into a fixed ladder of
   buckets — `<1ms`, `1–2ms`, `2–5ms`, `5–10ms`, and so on up to `≥10s` — so a reported
   percentile is the upper bound of its bucket and can overstate the true latency by up to
   about 2.5×. Precision is also capped by `-n`: percentiles resolve only in steps of `1/n`,
   so a p99 from a 100-request run rests on a single observation.
 - **Secrets on the command line are visible** in your shell history and to anyone who can run
-  `ps` while the test is running. This covers `-token`, and equally a key embedded in `-url`.
-  Prefer a shell variable that you clear afterwards.
+  `ps` while the test is running. This covers a credential passed via `-H`, and equally a key
+  embedded in `-url`. Prefer a shell variable that you clear afterwards.
 - **Workers are not capped at `-n`.** Passing `-c 500000 -n 5` creates far more goroutines
   than there is work for. Harmless, but wasteful.
 - **Single target only.** One URL, one method, one body per run.
 - **No redirect control.** Redirects are followed automatically, so a `301` never shows up in
   your results — you get the status at the end of the chain, and the latency covers every hop.
+  This also means `-n` undercounts the load your server actually receives: against a URL that
+  redirects once, `-n 500` puts **1000** requests on the target.
 - **No fixed-duration runs.** You say how many requests to send, not how long to run for.
 
 ## Roadmap

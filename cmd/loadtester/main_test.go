@@ -7,6 +7,7 @@ import (
 	"flag"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,62 @@ func TestInvalidValue(t *testing.T) {
 			},
 			wantErrContains: "flag -timeout",
 		},
+		{
+			name: "invalid header missing colon",
+			args: []string{
+				"-url", "http://www.example.com",
+				"-H", "X-Tag; a",
+			},
+			wantErrContains: `want "Name: Value"`,
+		},
+		{
+			name: "invalid header missing name",
+			args: []string{
+				"-url", "http://www.example.com",
+				"-H", ": a",
+			},
+			wantErrContains: "empty name",
+		},
+		{
+			name: "invalid header value contains \n",
+			args: []string{
+				"-url", "http://www.example.com",
+				"-H", "X-Tag: a\nb",
+			},
+			wantErrContains: "contains CR or LF",
+		},
+		{
+			name: "invalid header value contains \r",
+			args: []string{
+				"-url", "http://www.example.com",
+				"-H", "X-Tag: a\rb",
+			},
+			wantErrContains: "contains CR or LF",
+		},
+		{
+			name: "invalid header name contains \n",
+			args: []string{
+				"-url", "http://www.example.com",
+				"-H", "X-\nTag: ab",
+			},
+			wantErrContains: "contains CR or LF",
+		},
+		{
+			name: "invalid header name contains \r",
+			args: []string{
+				"-url", "http://www.example.com",
+				"-H", "X-Ta\rg: ab",
+			},
+			wantErrContains: "contains CR or LF",
+		},
+		{
+			name: "invalid header contains whitespace in the name",
+			args: []string{
+				"-url", "http://www.example.com",
+				"-H", "X Tag: ab",
+			},
+			wantErrContains: "contains whitespace character",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,7 +174,7 @@ func TestParseConfigDefaultValues(t *testing.T) {
 		Requests:    20,
 		Timeout:     1 * time.Second,
 		Method:      http.MethodGet,
-		Token:       "",
+		Headers:     http.Header{},
 		Body:        "",
 	}
 	var stderr bytes.Buffer
@@ -125,7 +182,7 @@ func TestParseConfigDefaultValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseConfig() unexpected error = %v", err)
 	}
-	if want != got {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("parseConfig() got = %v, want = %v", got, want)
 	}
 }
@@ -167,9 +224,9 @@ func TestRenderSummary(t *testing.T) {
 		"Failed: 2\n" +
 		"Elapsed: 2s\n" +
 		"Throughput: 4.00 req/s\n" +
-		"P50: 10ms\n" +
-		"P90: 20ms\n" +
-		"P99: 30ms\n" +
+		"P50: <= 10ms\n" +
+		"P90: <= 20ms\n" +
+		"P99: <= 30ms\n" +
 		"Errors:\n" +
 		"n/a\n"
 
@@ -184,7 +241,8 @@ func TestParseConfigAllValues(t *testing.T) {
 		"-c", "12",
 		"-n", "250",
 		"-method", "POST",
-		"-token", "token",
+		"-H", "Content-Type: application/json",
+		"-H", "Authorization: Bearer token",
 		"-body", `{"body": "some body"}`,
 		"-timeout", "500ms",
 	}
@@ -193,17 +251,20 @@ func TestParseConfigAllValues(t *testing.T) {
 		Concurrency: 12,
 		Requests:    250,
 		Method:      http.MethodPost,
-		Token:       "token",
-		Body:        `{"body": "some body"}`,
-		Timeout:     500 * time.Millisecond,
+		Headers: http.Header{
+			"Authorization": {"Bearer token"},
+			"Content-Type":  {"application/json"},
+		},
+		Body:    `{"body": "some body"}`,
+		Timeout: 500 * time.Millisecond,
 	}
 	var stderr bytes.Buffer
 	got, err := parseConfig(args, &stderr)
 	if err != nil {
 		t.Fatalf("parseConfig err = %q, want = nil", err)
 	}
-	if want != got {
-		t.Errorf("parseConfig() got = %v, want = %v", got, want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parseConfig() got = %+v, want = %+v", got, want)
 	}
 }
 

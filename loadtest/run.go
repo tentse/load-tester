@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 )
@@ -12,15 +13,16 @@ import (
 //
 // URL and Method must be non-empty. Concurrency, Requests, and Timeout must be
 // greater than zero. Timeout covers the complete request, including reading the
-// response body. Token and Body are optional; a token is sent as a bearer token,
-// and a non-empty body is sent as JSON.
+// response body. Headers and Body are optional. Headers are sent as given, with
+// repeated values preserved in order; a non-empty Body sets a JSON content type
+// unless Headers already carries one.
 type Config struct {
 	URL         string
 	Concurrency int
 	Requests    int
 	Timeout     time.Duration
 	Method      string
-	Token       string
+	Headers     http.Header
 	Body        string
 }
 
@@ -122,7 +124,7 @@ func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, job
 				return
 			}
 			start := time.Now()
-			status, err := r.hit(ctx, cfg.Method, cfg.URL, cfg.Token, cfg.Body)
+			status, err := r.hit(ctx, cfg.Method, cfg.URL, cfg.Body, cfg.Headers)
 			statusTracker.IncTotal()
 			if err != nil || isServerError(status) {
 				statusTracker.IncFailed()

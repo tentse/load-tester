@@ -8,8 +8,10 @@
 // and no way to run for a fixed duration: a run ends once Config.Requests
 // requests have been sent, or when ctx is canceled.
 //
-// Currently, the request config supports only TOKEN and BODY, and any query
-// parameters must be included in the URL itself.
+// Authentication is expressed through Config.Headers rather than a dedicated
+// field, so any scheme works: a bearer token, an API key under whatever name the
+// target expects, or several at once. Query parameters must be included in the
+// URL itself.
 //
 // Config has no defaults. Every field it validates must be set explicitly:
 //
@@ -19,7 +21,7 @@
 //	Requests     must be greater than zero
 //	Timeout      must be greater than zero
 //
-// Token and Body are the only optional fields. The loadtester command supplies
+// Headers and Body are the only optional fields. The loadtester command supplies
 // its own defaults for the rest before calling Run; the library does not.
 //
 // Timeout applies to each request on its own, not to the run as a whole. It
