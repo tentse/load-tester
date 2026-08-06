@@ -182,6 +182,9 @@ func validateConfig(cfg Config) error {
 	if cfg.Timeout <= 0 {
 		return fmt.Errorf("%w: invalid timeout -> %v", ErrInvalidConfig, cfg.Timeout)
 	}
+	if cfg.Expect <= 0 {
+		return fmt.Errorf("%w: invalid expect -> %v", ErrInvalidConfig, cfg.Expect)
+	}
 	return nil
 }
 

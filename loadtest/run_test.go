@@ -241,10 +241,34 @@ func TestInvalidConfig(t *testing.T) {
 				Concurrency: 5,
 				Requests:    5,
 				Method:      http.MethodGet,
-				Timeout:     time.Duration(0),
+				Timeout:     time.Duration(1),
 				Expect:      200,
 			},
 			wantErrContains: "invalid url",
+		},
+		{
+			name: "invalid expect == 0",
+			cfg: Config{
+				URL:         okMockServer.URL,
+				Concurrency: 5,
+				Requests:    5,
+				Method:      http.MethodGet,
+				Timeout:     time.Duration(1),
+				Expect:      0,
+			},
+			wantErrContains: "invalid expect",
+		},
+		{
+			name: "invalid expect < 0",
+			cfg: Config{
+				URL:         okMockServer.URL,
+				Concurrency: 5,
+				Requests:    5,
+				Method:      http.MethodGet,
+				Timeout:     time.Duration(1),
+				Expect:      -1,
+			},
+			wantErrContains: "invalid expect",
 		},
 	}
 
