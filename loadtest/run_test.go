@@ -21,7 +21,9 @@ func TestMain(m *testing.M) {
 
 func TestRun(t *testing.T) {
 
-	okMockServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	okMockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
 	defer okMockServer.Close()
 
 	tests := []struct {
@@ -39,6 +41,7 @@ func TestRun(t *testing.T) {
 				Requests:    10,
 				Timeout:     time.Duration(10) * time.Second,
 				Method:      http.MethodGet,
+				Expect:      200,
 			},
 			want: Summary{
 				Total:     10,
@@ -55,6 +58,7 @@ func TestRun(t *testing.T) {
 				Requests:    5,
 				Timeout:     time.Duration(10) * time.Second,
 				Method:      http.MethodGet,
+				Expect:      200,
 			},
 			want: Summary{
 				Total:     5,
@@ -108,6 +112,7 @@ func TestServerErrors(t *testing.T) {
 				Requests:    10,
 				Timeout:     time.Duration(10) * time.Second,
 				Method:      http.MethodGet,
+				Expect:      200,
 			},
 			want: Summary{
 				Total:     10,
@@ -144,7 +149,9 @@ func TestServerErrors(t *testing.T) {
 
 func TestInvalidConfig(t *testing.T) {
 
-	okMockServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	okMockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
 	defer okMockServer.Close()
 
 	tests := []struct {
@@ -161,6 +168,7 @@ func TestInvalidConfig(t *testing.T) {
 				Requests:    1,
 				Timeout:     time.Duration(10) * time.Second,
 				Method:      "",
+				Expect:      200,
 			},
 			want: Summary{
 				Total:     1,
@@ -176,6 +184,7 @@ func TestInvalidConfig(t *testing.T) {
 				Concurrency: 0,
 				Requests:    10,
 				Method:      http.MethodGet,
+				Expect:      200,
 			},
 			wantErrContains: "invalid concurrency",
 		},
@@ -186,6 +195,7 @@ func TestInvalidConfig(t *testing.T) {
 				Concurrency: -5,
 				Requests:    10,
 				Method:      http.MethodGet,
+				Expect:      200,
 			},
 			wantErrContains: "invalid concurrency",
 		},
@@ -196,6 +206,7 @@ func TestInvalidConfig(t *testing.T) {
 				Concurrency: 5,
 				Requests:    -10,
 				Method:      http.MethodGet,
+				Expect:      200,
 			},
 			wantErrContains: "invalid requests",
 		},
@@ -207,6 +218,7 @@ func TestInvalidConfig(t *testing.T) {
 				Requests:    0,
 				Timeout:     time.Duration(10) * time.Second,
 				Method:      http.MethodGet,
+				Expect:      200,
 			},
 			wantErrContains: "invalid requests",
 		},
@@ -218,6 +230,7 @@ func TestInvalidConfig(t *testing.T) {
 				Requests:    5,
 				Method:      http.MethodGet,
 				Timeout:     time.Duration(0),
+				Expect:      200,
 			},
 			wantErrContains: "invalid timeout",
 		},
@@ -229,6 +242,7 @@ func TestInvalidConfig(t *testing.T) {
 				Requests:    5,
 				Method:      http.MethodGet,
 				Timeout:     time.Duration(0),
+				Expect:      200,
 			},
 			wantErrContains: "invalid url",
 		},
@@ -262,6 +276,7 @@ func TestRunCancellation(t *testing.T) {
 		default:
 		}
 		<-req.Context().Done()
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer okMockServer.Close()
 	cfg := Config{
@@ -270,6 +285,7 @@ func TestRunCancellation(t *testing.T) {
 		Requests:    10,
 		Timeout:     time.Duration(1) * time.Second,
 		Method:      http.MethodGet,
+		Expect:      200,
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -337,6 +353,7 @@ func TestRunClosesIdleConnections(t *testing.T) {
 		Requests:    1,
 		Timeout:     defaultTimeout,
 		Method:      http.MethodGet,
+		Expect:      200,
 	})
 	if err != nil {
 		t.Fatalf("got err = %q, want = nil", err.Error())
@@ -507,6 +524,101 @@ func TestLatencyHistogram(t *testing.T) {
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("got latency histogram: %+v, want latency histogram: %+v", got, &tc.want)
 			}
+		})
+	}
+}
+
+func TestStatusMatchesExpectStatus(t *testing.T) {
+	mock200Server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mock200Server.Close()
+	mock500Server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer mock500Server.Close()
+
+	tests := []struct {
+		name string
+		cfg  Config
+		want Summary
+	}{
+		{
+			name: "expected status 200 calling 200 status server",
+			cfg: Config{
+				URL:         mock200Server.URL,
+				Timeout:     1 * time.Second,
+				Concurrency: 1,
+				Requests:    1,
+				Method:      http.MethodGet,
+				Expect:      200,
+			},
+			want: Summary{
+				Total:     1,
+				Succeeded: 1,
+				Failed:    0,
+			},
+		},
+		{
+			name: "expected status 500 calling 500 status server",
+			cfg: Config{
+				URL:         mock500Server.URL,
+				Concurrency: 1,
+				Timeout:     1 * time.Second,
+				Requests:    1,
+				Method:      http.MethodGet,
+				Expect:      500,
+			},
+			want: Summary{
+				Total:     1,
+				Succeeded: 1,
+				Failed:    0,
+			},
+		},
+		{
+			name: "expected status 200 calling non 200 status server",
+			cfg: Config{
+				URL:         mock500Server.URL,
+				Timeout:     1 * time.Second,
+				Concurrency: 1,
+				Requests:    1,
+				Method:      http.MethodGet,
+				Expect:      200,
+			},
+			want: Summary{
+				Total:     1,
+				Succeeded: 0,
+				Failed:    1,
+			},
+		},
+		{
+			name: "expected status 500 calling non 500 status server",
+			cfg: Config{
+				URL:         mock200Server.URL,
+				Timeout:     1 * time.Second,
+				Concurrency: 1,
+				Requests:    1,
+				Method:      http.MethodGet,
+				Expect:      500,
+			},
+			want: Summary{
+				Total:     1,
+				Succeeded: 0,
+				Failed:    1,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+
+			got, err := Run(t.Context(), tc.cfg)
+			if err != nil {
+				t.Fatalf("unexpected error occurred when calling Run(): %v", err)
+			}
+			assertEqual(t, "total", got.Total, tc.want.Total)
+			assertEqual(t, "succeeded", got.Succeeded, tc.want.Succeeded)
+			assertEqual(t, "failed", got.Failed, tc.want.Failed)
 		})
 	}
 }

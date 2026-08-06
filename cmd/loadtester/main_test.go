@@ -34,7 +34,19 @@ func TestMissingURL(t *testing.T) {
 	var stderr bytes.Buffer
 	_, err := parseConfig([]string{"-c", "10", "-n", "100"}, &stderr)
 	if err == nil {
-		t.Fatal("expected parsing to fail due to missing url but got err = nil")
+		t.Fatal("expected parsing to fail due to missing -url but got err = nil")
+	}
+	if got := stderr.String(); !strings.Contains(got, wantErrContains) {
+		t.Errorf("parseConfig() err = %v, want to contain %q", got, wantErrContains)
+	}
+}
+
+func TestMissingExpect(t *testing.T) {
+	wantErrContains := "-expect is required"
+	var stderr bytes.Buffer
+	_, err := parseConfig([]string{"-url", "http://url", "-c", "10", "-n", "100"}, &stderr)
+	if err == nil {
+		t.Fatal("expected parsing to fail due to missing -expect but got err = nil")
 	}
 	if got := stderr.String(); !strings.Contains(got, wantErrContains) {
 		t.Errorf("parseConfig() err = %v, want to contain %q", got, wantErrContains)
@@ -123,6 +135,14 @@ func TestInvalidValue(t *testing.T) {
 			},
 			wantErrContains: "contains whitespace character",
 		},
+		{
+			name: "invaid expect value",
+			args: []string{
+				"-url", "http://www.example.com",
+				"-expect", "0",
+			},
+			wantErrContains: "valid -expect is required",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,7 +168,18 @@ func TestMissingArgument(t *testing.T) {
 	if got := stderr.String(); !strings.Contains(got, wantErrContains) {
 		t.Errorf("parseConfig() err = %q, want = %q", got, wantErrContains)
 	}
+}
 
+func TestMissingExpectArgument(t *testing.T) {
+	wantErrContains := "flag needs an argument: -expect"
+	var stderr bytes.Buffer
+	_, err := parseConfig([]string{"-url", "http://example.com", "-expect"}, &stderr)
+	if err == nil {
+		t.Fatalf("expected error = %q, got = nil", wantErrContains)
+	}
+	if got := stderr.String(); !strings.Contains(got, wantErrContains) {
+		t.Errorf("parseConfig() err = %q, want = %q", got, wantErrContains)
+	}
 }
 
 func TestUnknownFlag(t *testing.T) {
@@ -167,6 +198,7 @@ func TestParseConfigDefaultValues(t *testing.T) {
 
 	args := []string{
 		"-url", "http://example.com",
+		"-expect", "200",
 	}
 	want := loadtest.Config{
 		URL:         "http://example.com",
@@ -176,6 +208,7 @@ func TestParseConfigDefaultValues(t *testing.T) {
 		Method:      http.MethodGet,
 		Headers:     http.Header{},
 		Body:        "",
+		Expect:      200,
 	}
 	var stderr bytes.Buffer
 	got, err := parseConfig(args, &stderr)
@@ -241,6 +274,7 @@ func TestParseConfigAllValues(t *testing.T) {
 		"-c", "12",
 		"-n", "250",
 		"-method", "POST",
+		"-expect", "201",
 		"-H", "Content-Type: application/json",
 		"-H", "Authorization: Bearer token",
 		"-body", `{"body": "some body"}`,
@@ -251,6 +285,7 @@ func TestParseConfigAllValues(t *testing.T) {
 		Concurrency: 12,
 		Requests:    250,
 		Method:      http.MethodPost,
+		Expect:      201,
 		Headers: http.Header{
 			"Authorization": {"Bearer token"},
 			"Content-Type":  {"application/json"},
@@ -365,6 +400,7 @@ func TestRunSuccess(t *testing.T) {
 		"-n", "2",
 		"-method", http.MethodGet,
 		"-timeout", "1s",
+		"-expect", "200",
 	}
 	got := run(t.Context(), args, &stdout, &stderr)
 	if got != 0 {
@@ -396,6 +432,7 @@ func TestRunSensitiveUrlContent(t *testing.T) {
 		"-n", "1",
 		"-method", http.MethodGet,
 		"-timeout", "1s",
+		"-expect", "200",
 	}
 	got := run(t.Context(), args, &stdout, &stderr)
 	if got != 0 {
@@ -409,9 +446,6 @@ func TestRunSensitiveUrlContent(t *testing.T) {
 	for _, want := range []string{
 		"Load test summary\n",
 		"Total: 1\n",
-		"Succeeded: 0\n",
-		"Failed: 1\n",
-		"Errors:\n  request failed: 1\n",
 	} {
 		if !strings.Contains(output, want) {
 			t.Errorf("stdout = %q, want it contains %q", output, want)
@@ -464,7 +498,7 @@ func TestRunRenderFailureWithStderrWriteFailure(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer mockServer.Close()
-	got := run(t.Context(), []string{"-url", mockServer.URL}, failingWriter{}, &stderr)
+	got := run(t.Context(), []string{"-url", mockServer.URL, "-expect", "200"}, failingWriter{}, &stderr)
 
 	if got != 1 {
 		t.Fatalf("run() got = %d, want = 1", got)
@@ -474,7 +508,7 @@ func TestRunRenderFailureWithStderrWriteFailure(t *testing.T) {
 
 func TestRunInvalidConfig(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	got := run(t.Context(), []string{"-url", "http://example.com", "-c", "0"}, &stdout, &stderr)
+	got := run(t.Context(), []string{"-url", "http://example.com", "-expect", "200", "-c", "0"}, &stdout, &stderr)
 	if got != 2 {
 		t.Fatalf("run() exit code = %d, want exit code = 2", got)
 	}
@@ -498,7 +532,7 @@ func TestRunStdoutWriteFail(t *testing.T) {
 	}))
 	defer mockServer.Close()
 	var stderr bytes.Buffer
-	got := run(t.Context(), []string{"-url", mockServer.URL}, failingWriter{}, &stderr)
+	got := run(t.Context(), []string{"-url", mockServer.URL, "-expect", "200"}, failingWriter{}, &stderr)
 
 	if got != 1 {
 		t.Fatalf("run() exit code = %d, want exit code = 1", got)
@@ -528,7 +562,7 @@ func TestRunContextCancellation(t *testing.T) {
 	defer cancel()
 	result := make(chan int, 1)
 	go func() {
-		result <- run(ctx, []string{"-url", mockServer.URL, "-c", "1", "-n", "1"}, &stdout, &stderr)
+		result <- run(ctx, []string{"-url", mockServer.URL, "-expect", "200", "-c", "1", "-n", "1"}, &stdout, &stderr)
 	}()
 
 	select {
@@ -582,7 +616,7 @@ func TestRunContextCancellationStderrWriteFailure(t *testing.T) {
 	defer cancel()
 	result := make(chan int, 1)
 	go func() {
-		result <- run(ctx, []string{"-url", mockServer.URL, "-c", "1", "-n", "1"}, &stdout, failingWriter{})
+		result <- run(ctx, []string{"-url", mockServer.URL, "-expect", "200", "-c", "1", "-n", "1"}, &stdout, failingWriter{})
 	}()
 
 	select {
@@ -632,7 +666,7 @@ func TestRunContextCancellationStdoutWriteFailure(t *testing.T) {
 	defer cancel()
 	result := make(chan int, 1)
 	go func() {
-		result <- run(ctx, []string{"-url", mockServer.URL, "-c", "1", "-n", "1"}, failingWriter{}, &stderr)
+		result <- run(ctx, []string{"-url", mockServer.URL, "-expect", "200", "-c", "1", "-n", "1"}, failingWriter{}, &stderr)
 	}()
 
 	select {

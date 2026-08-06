@@ -27,6 +27,7 @@ type Config struct {
 	Method      string
 	Headers     http.Header
 	Body        string
+	Expect      int
 }
 
 // bucketEdges are the exclusive upper bounds edges of the latency display range
@@ -106,12 +107,13 @@ func (s *statusTracker) IncFailed() {
 	s.Failed++
 }
 
-func (s *statusTracker) UpdateErrors(status int, err error) {
+func (s *statusTracker) UpdateErrors(status, expect int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
 		s.Errors[classifyFailure(err)]++
-	} else if isServerError(status) {
+	}
+	if status != expect {
 		s.Errors[statusErrText(status)]++
 	}
 }
@@ -148,9 +150,9 @@ func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, job
 			start := time.Now()
 			status, err := r.hit(ctx, cfg.Method, cfg.URL, cfg.Body, cfg.Headers)
 			statusTracker.IncTotal()
-			if err != nil || isServerError(status) {
+			if err != nil || status != cfg.Expect {
 				statusTracker.IncFailed()
-				statusTracker.UpdateErrors(status, err)
+				statusTracker.UpdateErrors(status, cfg.Expect, err)
 			} else {
 				statusTracker.IncSucceeded()
 				latency := time.Since(start)

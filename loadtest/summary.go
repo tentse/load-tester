@@ -76,7 +76,3 @@ func statusErrText(statusCode int) string {
 	}
 	return strings.ToLower(text)
 }
-
-func isServerError(status int) bool {
-	return status >= 500
-}
