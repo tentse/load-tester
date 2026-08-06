@@ -1,14 +1,9 @@
 package loadtest
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -45,25 +40,6 @@ type Summary struct {
 	P90        time.Duration
 	P99        time.Duration
 	Errors     map[string]int
-}
-
-func classifyFailure(err error) string {
-	var networkErr net.Error
-
-	switch {
-	case errors.Is(err, context.DeadlineExceeded):
-		return "request timeout"
-	case errors.Is(err, syscall.ECONNREFUSED):
-		return "connection refused"
-	case errors.Is(err, syscall.ECONNRESET):
-		return "connection reset"
-	case errors.Is(err, io.ErrUnexpectedEOF):
-		return "unexpected EOF"
-	case errors.As(err, &networkErr) && networkErr.Timeout():
-		return "request timeout"
-	default:
-		return "request failed"
-	}
 }
 
 func summarize(lh *latencyHistogram, elapsed time.Duration, total, succeeded, failed int, errors map[string]int) Summary {

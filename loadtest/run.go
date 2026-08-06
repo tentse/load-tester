@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -110,6 +113,25 @@ func (s *statusTracker) UpdateErrors(status int, err error) {
 		s.Errors[classifyFailure(err)]++
 	} else if isServerError(status) {
 		s.Errors[statusErrText(status)]++
+	}
+}
+
+func classifyFailure(err error) string {
+	var networkErr net.Error
+
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "request timeout"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "connection refused"
+	case errors.Is(err, syscall.ECONNRESET):
+		return "connection reset"
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		return "unexpected EOF"
+	case errors.As(err, &networkErr) && networkErr.Timeout():
+		return "request timeout"
+	default:
+		return "request failed"
 	}
 }
 
