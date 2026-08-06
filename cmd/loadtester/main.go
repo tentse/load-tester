@@ -21,6 +21,27 @@ type errorCount struct {
 	count   int
 }
 
+func parseHeader(s string) (name, value string, err error) {
+	name, value, ok := strings.Cut(s, ":")
+	if !ok {
+		return "", "", fmt.Errorf("invalid header %q: want \"Name: Value\"", s)
+	}
+
+	name, value = strings.TrimSpace(name), strings.TrimSpace(value)
+
+	if name == "" {
+		return "", "", fmt.Errorf("invalid header %q: empty name", s)
+	}
+	if strings.ContainsAny(name, " \t") {
+		return "", "", fmt.Errorf("invalid header %q: contains whitespace character", name)
+	}
+	if strings.ContainsAny(name+value, "\r\n") {
+		return "", "", fmt.Errorf("invalid header %q: contains CR or LF", s)
+	}
+
+	return name, value, nil
+}
+
 func parseConfig(args []string, stderr io.Writer) (loadtest.Config, error) {
 	fs := flag.NewFlagSet("loadtester", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -34,9 +55,18 @@ func parseConfig(args []string, stderr io.Writer) (loadtest.Config, error) {
 	concurrency := fs.Int("c", 10, "number of concurrent worker")
 	requests := fs.Int("n", 20, "total number of requests")
 	method := fs.String("method", http.MethodGet, "HTTP method")
-	token := fs.String("token", "", "bearer token")
 	body := fs.String("body", "", "JSON request body")
 	timeout := fs.Duration("timeout", 1*time.Second, "per request timeout")
+
+	headers := http.Header{}
+	fs.Func("H", `custom header, repeatable: -H "Name: Value`, func(s string) error {
+		name, value, err := parseHeader(s)
+		if err != nil {
+			return err
+		}
+		headers.Add(name, value)
+		return nil
+	})
 
 	if err := fs.Parse(args); err != nil {
 		return loadtest.Config{}, fmt.Errorf("parsing failed: %w", err)
@@ -52,7 +82,7 @@ func parseConfig(args []string, stderr io.Writer) (loadtest.Config, error) {
 		Concurrency: *concurrency,
 		Requests:    *requests,
 		Method:      *method,
-		Headers:     *headers,
+		Headers:     http.Header{},
 		Body:        *body,
 		Timeout:     *timeout,
 	}, nil

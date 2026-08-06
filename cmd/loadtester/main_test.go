@@ -67,6 +67,62 @@ func TestInvalidValue(t *testing.T) {
 			},
 			wantErrContains: "flag -timeout",
 		},
+		{
+			name: "invalid header missing colon",
+			args: []string{
+				"-url", "http://www.example.com",
+				"-H", "X-Tag; a",
+			},
+			wantErrContains: `want "Name: Value"`,
+		},
+		{
+			name: "invalid header missing name",
+			args: []string{
+				"-url", "http://www.example.com",
+				"-H", ": a",
+			},
+			wantErrContains: "empty name",
+		},
+		{
+			name: "invalid header value contains \n",
+			args: []string{
+				"-url", "http://www.example.com",
+				"-H", "X-Tag: a\nb",
+			},
+			wantErrContains: "contains CR or LF",
+		},
+		{
+			name: "invalid header value contains \r",
+			args: []string{
+				"-url", "http://www.example.com",
+				"-H", "X-Tag: a\rb",
+			},
+			wantErrContains: "contains CR or LF",
+		},
+		{
+			name: "invalid header name contains \n",
+			args: []string{
+				"-url", "http://www.example.com",
+				"-H", "X-\nTag: ab",
+			},
+			wantErrContains: "contains CR or LF",
+		},
+		{
+			name: "invalid header name contains \r",
+			args: []string{
+				"-url", "http://www.example.com",
+				"-H", "X-Ta\rg: ab",
+			},
+			wantErrContains: "contains CR or LF",
+		},
+		{
+			name: "invalid header contains whitespace in the name",
+			args: []string{
+				"-url", "http://www.example.com",
+				"-H", "X Tag: ab",
+			},
+			wantErrContains: "contains whitespace character",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
