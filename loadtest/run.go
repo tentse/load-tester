@@ -14,11 +14,13 @@ import (
 
 // Config defines one closed-loop HTTP load test.
 //
-// URL and Method must be non-empty. Concurrency, Requests, and Timeout must be
-// greater than zero. Timeout covers the complete request, including reading the
-// response body. Headers and Body are optional. Headers are sent as given, with
-// repeated values preserved in order; a non-empty Body sets a JSON content type
-// unless Headers already carries one.
+// URL and Method must be non-empty. Concurrency, Requests, Timeout, and Expect
+// must be greater than zero. Timeout covers the complete request, including
+// reading the response body. Expect is the HTTP status code that counts as a
+// success; any other status is a failure, and it has no default. Headers and Body
+// are optional. Headers are sent as given, with repeated values preserved in
+// order; a non-empty Body sets a JSON content type unless Headers already carries
+// one.
 type Config struct {
 	URL         string
 	Concurrency int

@@ -41,8 +41,11 @@ Requires Go 1.26 or newer.
 ## Quick start
 
 ```sh
-loadtester -url http://localhost:8080/ -c 20 -n 500
+loadtester -url http://localhost:8080/ -c 20 -n 500 -expect 200
 ```
+
+`-expect` is required: you tell the tool which status code counts as a success, and everything
+else is a failure. See [Expected status](#expected-status) for why it has no default.
 
 ```
 Load test summary
@@ -66,6 +69,7 @@ you still get a summary of everything that completed.
 | Flag | Default | Meaning |
 |---|---|---|
 | `-url` | *(required)* | Target URL |
+| `-expect` | *(required)* | HTTP status code that counts as a success. Any other status is a failure |
 | `-c` | `10` | Number of concurrent workers |
 | `-n` | `20` | Total number of requests to send |
 | `-method` | `GET` | HTTP method |
@@ -78,8 +82,34 @@ loadtester -url https://api.example.internal/users \
   -method POST \
   -body '{"name":"test"}' \
   -H "Authorization: Bearer $API_TOKEN" \
+  -expect 201 \
   -c 50 -n 1000 -timeout 5s
 ```
+
+### Expected status
+
+`-expect` takes exactly one status code, and it has no default — every run has to say what it
+considers a success. That is deliberate: a load test that does not check what came back can
+report a perfectly healthy run while hitting the wrong endpoint entirely. Point the tool at a
+typo'd path without `-expect` and a wall of `404`s would look identical to a wall of `200`s.
+
+Match the code to what the endpoint actually returns — a `POST` that creates something usually
+answers `201`, not `200`:
+
+```sh
+loadtester -url https://api.example.internal/orders -method POST \
+  -body '{"item":"x"}' -expect 201 -n 500
+```
+
+Because the check is an exact match rather than a range, you can load-test an error path on
+purpose. This run treats `500` as the success case and reports anything else as a failure:
+
+```sh
+loadtester -url https://api.example.internal/boom -expect 500 -n 200
+```
+
+Requests that never get a response at all — timeouts, connection refusals, resets — are always
+failures, whatever `-expect` is set to. There is no status code to compare in that case.
 
 ### Headers
 
@@ -89,13 +119,14 @@ scheme — a bearer token, an API key under whatever name your service uses, or 
 ```sh
 loadtester -url https://api.example.internal/orders \
   -H "X-API-Key: $API_KEY" \
-  -H "X-Request-Source: load-test"
+  -H "X-Request-Source: load-test" \
+  -expect 200
 ```
 
 Repeating the same name sends the header more than once, in the order given:
 
 ```sh
-loadtester -url https://api.example.internal/search -H "X-Tag: a" -H "X-Tag: b"
+loadtester -url https://api.example.internal/search -H "X-Tag: a" -H "X-Tag: b" -expect 200
 ```
 
 A malformed header — no colon, an empty name, or a newline in either field — is rejected
@@ -110,10 +141,10 @@ The engine is **closed-loop**: `-n` requests are sent in total, spread across `-
 and each worker waits for its response before taking the next request. There is no target
 request rate — throughput is whatever the target can absorb.
 
-- **Succeeded / Failed** — a request succeeds when it completes and returns a status **below
-  500**. Statuses of 500 and above, along with timeouts, connection failures, and truncated
-  responses, are counted as failures. Note that `404` counts as a success: the server
-  responded, which is what a load test measures.
+- **Succeeded / Failed** — a request succeeds when it completes and returns **exactly the status
+  you passed to `-expect`**. Every other status is a failure, as are timeouts, connection
+  failures, and truncated responses. So under `-expect 200`, a `404` is a failure — the server
+  answered, but not with what you asked for.
 - **Throughput** — successful requests per second over the wall-clock run.
 - **P50 / P90 / P99** — latency percentiles over **successful requests only**, so a wave
   of fast connection refusals cannot flatter your latency numbers. Each measurement covers the
@@ -122,8 +153,11 @@ request rate — throughput is whatever the target can absorb.
   of successful requests finished in under 200ms" — see
   [How latencies are aggregated](#how-latencies-are-aggregated) below.
 - **Errors** — safe, stable failure categories grouped by how often they occurred, most
-  frequent first. Request timeouts, connection refusals, connection resets, truncated
-  responses, and unknown request failures use fixed category names. URL user information and
+  frequent first. A request that came back with the wrong status is listed under that status's
+  name, so under `-expect 200` a run against a missing path reads `not found: 500`. Requests
+  that never completed are listed by cause instead: request timeouts, connection refusals,
+  connection resets, truncated responses, and unknown request failures use fixed category
+  names. The counts always add up to `Failed`. URL user information and
   query values are not included in these categories, and equivalent failures are grouped
   together even when their underlying network errors contain different local ports.
 
@@ -178,7 +212,7 @@ width of the bucket it lands in.
 |---|---|
 | `0` | The run completed and a summary was printed (`-h` also exits `0`) |
 | `1` | The run failed for a reason other than configuration |
-| `2` | Invalid usage — a bad flag, a missing `-url`, or an invalid configuration |
+| `2` | Invalid usage — a bad flag, a missing `-url` or `-expect`, or an invalid configuration |
 | `130` | Interrupted with `Ctrl+C`; a partial summary was printed |
 
 A run whose requests all *failed* still exits `0` — the load test itself succeeded, and the
@@ -206,6 +240,7 @@ func main() {
 		Concurrency: 10,
 		Requests:    100,
 		Timeout:     time.Second,
+		Expect:      http.StatusOK,
 		Headers: http.Header{
 			"X-API-Key": {"secret"},
 		},
@@ -217,6 +252,9 @@ func main() {
 	fmt.Printf("%d/%d succeeded, p99 %v\n", summary.Succeeded, summary.Total, summary.P99)
 }
 ```
+
+`Expect` is required here exactly as `-expect` is on the command line — a `Config` that leaves
+it at zero fails validation rather than defaulting to anything.
 
 `Run` honors context cancellation: cancel the context and it stops scheduling work, waits for
 in-flight requests, and returns the partial `Summary` along with `ctx.Err()`. A `Config` that
@@ -246,10 +284,15 @@ Honest about what the tool does not do yet. Each of these is planned work, not a
 - **Workers are not capped at `-n`.** Passing `-c 500000 -n 5` creates far more goroutines
   than there is work for. Harmless, but wasteful.
 - **Single target only.** One URL, one method, one body per run.
+- **`-expect` takes one exact code, not a range or a list.** There is no way to accept "any
+  2xx" or "200 or 204" in a single run, so an endpoint that legitimately answers with more than
+  one status has to be tested one code at a time. The value is also only checked for being
+  positive — `-expect 99999` is accepted and simply fails every request.
 - **No redirect control.** Redirects are followed automatically, so a `301` never shows up in
   your results — you get the status at the end of the chain, and the latency covers every hop.
-  This also means `-n` undercounts the load your server actually receives: against a URL that
-  redirects once, `-n 500` puts **1000** requests on the target.
+  This means `-expect 301` can never match against a URL that actually redirects. It also means
+  `-n` undercounts the load your server receives: against a URL that redirects once, `-n 500`
+  puts **1000** requests on the target.
 - **No fixed-duration runs.** You say how many requests to send, not how long to run for.
 
 ## Roadmap

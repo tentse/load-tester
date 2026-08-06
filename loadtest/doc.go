@@ -20,9 +20,18 @@
 //	Concurrency  must be greater than zero
 //	Requests     must be greater than zero
 //	Timeout      must be greater than zero
+//	Expect       must be greater than zero
 //
 // Headers and Body are the only optional fields. The loadtester command supplies
 // its own defaults for the rest before calling Run; the library does not.
+//
+// Expect is the HTTP status code that counts as a success, and it has no default:
+// a Config that leaves it at zero fails validation rather than falling back to a
+// range. Requiring it is deliberate. A load test that does not check what came
+// back reports a healthy run against the wrong endpoint just as happily as
+// against the right one, and a wall of 404s is indistinguishable from a wall of
+// 200s. Because the comparison is an exact match rather than a range, an error
+// path can be load tested on purpose by setting Expect to 500.
 //
 // Timeout applies to each request on its own, not to the run as a whole. It
 // covers the complete round trip, including reading the response body.
@@ -31,8 +40,8 @@
 // are not configurable.
 //
 // A request succeeds when it completes without a transport error and its HTTP
-// status is below 500. As of now statuses of 500 and above, and requests that never
-// complete, are considered as failures. Summary.Throughput counts successful requests per
+// status is exactly Config.Expect. Every other status is a failure, as is any
+// request that never completes. Summary.Throughput counts successful requests per
 // second, and Summary.P50, P90, and P99 are latency percentiles over successful
 // requests only. Latencies are counted into a fixed bucket ladder rather than
 // retained individually, so each percentile is the upper bound of the bucket it
