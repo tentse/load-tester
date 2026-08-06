@@ -174,6 +174,8 @@ func TestParseConfigDefaultValues(t *testing.T) {
 		Requests:    20,
 		Timeout:     1 * time.Second,
 		Method:      http.MethodGet,
+		Headers:     http.Header{},
+		Body:        "",
 	}
 	var stderr bytes.Buffer
 	got, err := parseConfig(args, &stderr)
@@ -239,7 +241,8 @@ func TestParseConfigAllValues(t *testing.T) {
 		"-c", "12",
 		"-n", "250",
 		"-method", "POST",
-		"-token", "token",
+		"-H", "Content-Type: application/json",
+		"-H", "Authorization: Bearer token",
 		"-body", `{"body": "some body"}`,
 		"-timeout", "500ms",
 	}
@@ -261,7 +264,7 @@ func TestParseConfigAllValues(t *testing.T) {
 		t.Fatalf("parseConfig err = %q, want = nil", err)
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("parseConfig() got = %v, want = %v", got, want)
+		t.Errorf("parseConfig() got = %+v, want = %+v", got, want)
 	}
 }
 
