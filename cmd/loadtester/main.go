@@ -118,9 +118,9 @@ func getSummaryText(summary loadtest.Summary) string {
 		b.WriteString("P50: n/a\nP90: n/a\nP99: n/a\n")
 	} else {
 		fmt.Fprintf(&b,
-			"P50: %v\n"+
-				"P90: %v\n"+
-				"P99: %v\n",
+			"P50: <= %v\n"+
+				"P90: <= %v\n"+
+				"P99: <= %v\n",
 			summary.P50,
 			summary.P90,
 			summary.P99,

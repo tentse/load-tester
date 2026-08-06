@@ -224,9 +224,9 @@ func TestRenderSummary(t *testing.T) {
 		"Failed: 2\n" +
 		"Elapsed: 2s\n" +
 		"Throughput: 4.00 req/s\n" +
-		"P50: 10ms\n" +
-		"P90: 20ms\n" +
-		"P99: 30ms\n" +
+		"P50: <= 10ms\n" +
+		"P90: <= 20ms\n" +
+		"P99: <= 30ms\n" +
 		"Errors:\n" +
 		"n/a\n"
 
