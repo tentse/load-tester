@@ -51,9 +51,9 @@ Succeeded: 500
 Failed: 0
 Elapsed: 249.2195ms
 Throughput: 2006.26 req/s
-P50: 5ms
-P90: 10ms
-P99: 200ms
+P50: <= 5ms
+P90: <= 10ms
+P99: <= 200ms
 Errors:
 n/a
 ```
@@ -118,8 +118,9 @@ request rate — throughput is whatever the target can absorb.
 - **P50 / P90 / P99** — latency percentiles over **successful requests only**, so a wave
   of fast connection refusals cannot flatter your latency numbers. Each measurement covers the
   full request including reading the response body. Percentiles are reported as the **upper
-  bound** of a latency bucket, so read `P99: 200ms` as "99% of successful requests finished in
-  under 200ms" — see [How latencies are aggregated](#how-latencies-are-aggregated) below.
+  bound** of a latency bucket and printed with a leading `<=`, so read `P99: <= 200ms` as "99%
+  of successful requests finished in under 200ms" — see
+  [How latencies are aggregated](#how-latencies-are-aggregated) below.
 - **Errors** — safe, stable failure categories grouped by how often they occurred, most
   frequent first. Request timeouts, connection refusals, connection resets, truncated
   responses, and unknown request failures use fixed category names. URL user information and
@@ -165,7 +166,7 @@ would drop nearly everything into the first one and spend the rest on an empty t
 A percentile is then read by walking the buckets from fastest to slowest, accumulating counts
 until the target rank is reached, then reporting that bucket's upper bound. For `P90` above,
 the rank is `0.9 × 500 = 450`; the running total passes it in `5–10ms` (40 + 260 + 155 = 455),
-so `P90` reports `10ms`.
+so `P90` reports `10ms` and the CLI prints it as `P90: <= 10ms`.
 
 The trade-off is memory for precision. Memory is constant — 14 counters no matter what `-n`
 is, so two million requests cost the same as ten — but a percentile is only known to the
