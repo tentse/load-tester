@@ -4,18 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"sync"
+	"syscall"
 	"time"
 )
 
 // Config defines one closed-loop HTTP load test.
 //
-// URL and Method must be non-empty. Concurrency, Requests, and Timeout must be
-// greater than zero. Timeout covers the complete request, including reading the
-// response body. Headers and Body are optional. Headers are sent as given, with
-// repeated values preserved in order; a non-empty Body sets a JSON content type
-// unless Headers already carries one.
+// URL and Method must be non-empty. Concurrency, Requests, Timeout, and Expect
+// must be greater than zero. Timeout covers the complete request, including
+// reading the response body. Expect is the HTTP status code that counts as a
+// success; any other status is a failure, and it has no default. Headers and Body
+// are optional. Headers are sent as given, with repeated values preserved in
+// order; a non-empty Body sets a JSON content type unless Headers already carries
+// one.
 type Config struct {
 	URL         string
 	Concurrency int
@@ -24,6 +29,7 @@ type Config struct {
 	Method      string
 	Headers     http.Header
 	Body        string
+	Expect      int
 }
 
 // bucketEdges are the exclusive upper bounds edges of the latency display range
@@ -103,13 +109,32 @@ func (s *statusTracker) IncFailed() {
 	s.Failed++
 }
 
-func (s *statusTracker) UpdateErrors(status int, err error) {
+func (s *statusTracker) UpdateErrors(status, expect int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
 		s.Errors[classifyFailure(err)]++
-	} else if isServerError(status) {
+	} else if status != expect {
 		s.Errors[statusErrText(status)]++
+	}
+}
+
+func classifyFailure(err error) string {
+	var networkErr net.Error
+
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "request timeout"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "connection refused"
+	case errors.Is(err, syscall.ECONNRESET):
+		return "connection reset"
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		return "unexpected EOF"
+	case errors.As(err, &networkErr) && networkErr.Timeout():
+		return "request timeout"
+	default:
+		return "request failed"
 	}
 }
 
@@ -126,9 +151,9 @@ func (r *runner) worker(ctx context.Context, wg *sync.WaitGroup, cfg Config, job
 			start := time.Now()
 			status, err := r.hit(ctx, cfg.Method, cfg.URL, cfg.Body, cfg.Headers)
 			statusTracker.IncTotal()
-			if err != nil || isServerError(status) {
+			if err != nil || status != cfg.Expect {
 				statusTracker.IncFailed()
-				statusTracker.UpdateErrors(status, err)
+				statusTracker.UpdateErrors(status, cfg.Expect, err)
 			} else {
 				statusTracker.IncSucceeded()
 				latency := time.Since(start)
@@ -157,6 +182,9 @@ func validateConfig(cfg Config) error {
 	}
 	if cfg.Timeout <= 0 {
 		return fmt.Errorf("%w: invalid timeout -> %v", ErrInvalidConfig, cfg.Timeout)
+	}
+	if cfg.Expect <= 0 {
+		return fmt.Errorf("%w: invalid expect -> %v", ErrInvalidConfig, cfg.Expect)
 	}
 	return nil
 }

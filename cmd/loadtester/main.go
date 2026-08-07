@@ -57,6 +57,7 @@ func parseConfig(args []string, stderr io.Writer) (loadtest.Config, error) {
 	method := fs.String("method", http.MethodGet, "HTTP method")
 	body := fs.String("body", "", "JSON request body")
 	timeout := fs.Duration("timeout", 1*time.Second, "per request timeout")
+	expect := fs.Int("expect", 0, "HTTP status code that counts as a success (required)")
 
 	headers := http.Header{}
 	fs.Func("H", `custom header, repeatable: -H "Name: Value`, func(s string) error {
@@ -76,6 +77,11 @@ func parseConfig(args []string, stderr io.Writer) (loadtest.Config, error) {
 		fs.Usage()
 		return loadtest.Config{}, errors.New("-url is required")
 	}
+	if *expect <= 0 {
+		fmt.Fprint(fs.Output(), "parsing failed: valid -expect is required\n")
+		fs.Usage()
+		return loadtest.Config{}, errors.New("valid -expect is required")
+	}
 
 	return loadtest.Config{
 		URL:         *targetURL,
@@ -85,6 +91,7 @@ func parseConfig(args []string, stderr io.Writer) (loadtest.Config, error) {
 		Headers:     headers,
 		Body:        *body,
 		Timeout:     *timeout,
+		Expect:      *expect,
 	}, nil
 }
 

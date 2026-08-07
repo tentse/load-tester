@@ -1,13 +1,14 @@
-# Design notes: multi-endpoint JSON load tests (v0.4)
+# Design notes: multi-endpoint JSON load tests (v0.5)
 
 **Status:** proposal / design record. Nothing here is implemented. This is the agreed shape
-for the milestone *after* `v0.3.0` (custom request headers, released 2026-08-06).
+for the milestone *after* `v0.4.0` (required expected status).
 
-> The version number has moved twice: this was written targeting v0.2, which went to the
-> bounded-memory histogram release, then v0.3, which went to custom request headers. It is now
-> v0.4. The README roadmap deliberately no longer names a version, so it cannot drift again.
+> The version number has moved three times: this was written targeting v0.2, which went to the
+> bounded-memory histogram release, then v0.3, which went to custom request headers, then v0.4,
+> which went to required expected status. It is now v0.5. The README roadmap deliberately no
+> longer names a version, so it cannot drift again — only this heading has to be corrected.
 
-**Scope boundary (hard):** v0.4 stays **stateless and fire-and-forget**, exactly like today's
+**Scope boundary (hard):** v0.5 stays **stateless and fire-and-forget**, exactly like today's
 engine. No value templating, no response capture, no request chaining, no ordered phases. Those
 are deliberately *out of scope* — see "Explicitly out of scope" at the bottom.
 
@@ -103,13 +104,17 @@ It warns rather than rejects because legitimate cases exist: DELETE-as-consume
 
 ### 5. `expectStatus` per entry
 
-Success is currently "completed, and status < 500". That is too loose for a multi-endpoint file
-where you know what each endpoint *should* return. `POST /users` answering `200` instead of
-`201`, or `403` instead of `201`, currently counts as a success and inflates the numbers.
+> **Half of this lands in `v0.4.0`.** The single-target engine gets the required `-expect` flag
+> and `Config.Expect`, making success `status == Expect` and retiring the old `status < 500`
+> rule. What remains for this milestone is making the expectation **per entry** rather than per
+> run.
 
-`expectStatus` makes the expectation explicit. A mismatch is a **failure**, so it lands in
-`Failed` and `Errors` and is excluded from the latency histogram — which matters because
-percentiles are computed over successful requests only.
+Per-run is too coarse for a multi-endpoint file, where each endpoint has its own correct answer:
+one `-expect` cannot be simultaneously `201` for a create and `204` for a delete.
+
+`expectStatus` makes the expectation explicit per entry. A mismatch is a **failure**, so it
+lands in `Failed` and `Errors` and is excluded from the latency histogram — which matters
+because percentiles are computed over successful requests only.
 
 This is what makes authentication testing expressible: an entry with an expired token and
 `"expectStatus": 401` asserts that rejection keeps working under load.
@@ -213,7 +218,7 @@ fails the run before any load is generated.
 
 ### 8. No `defaults` block — for now
 
-Considered and dropped for v0.4. Dropping it deletes two rules from the format — per-key merge,
+Considered and dropped for v0.5. Dropping it deletes two rules from the format — per-key merge,
 and a `null` sentinel to remove an inherited key — and keeps every entry fully self-describing
 when read in isolation.
 
@@ -240,7 +245,7 @@ A representative instance:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/tentse/load-tester/v0.4.0/schema/requests.schema.json",
+  "$schema": "https://raw.githubusercontent.com/tentse/load-tester/v0.5.0/schema/requests.schema.json",
   "version": 1,
 
   "baseUrl": "https://staging.example.com",
@@ -311,7 +316,7 @@ Produces **7 summaries from 811 requests**: `search` 50 (two variants merged), `
 | `bodyFile` | string, optional | Path, read once at startup. Excludes `body`. |
 | `headers` | map, optional | Sent as written. `${ENV}` resolved at load. Carries credentials. |
 | `count` | int, optional | Defaults to 1. Warns if raised on DELETE. |
-| `expectStatus` | int, optional | Mismatch is a failure, not a success. |
+| `expectStatus` | int, **required** | Mismatch is a failure, not a success. Required per entry, matching the single-target `-expect`. |
 
 ---
 
@@ -351,15 +356,17 @@ loadtester -f -            # read the file from stdin
 Stdin support is a few lines and fits the generate-then-run workflow the docs strategy is built
 around — no temp file needed.
 
-**When `-f` is present, the single-target flags (`-url`, `-n`, `-c`, `-body`, `-token`) are
-rejected with exit code 2.** Not ignored, not merged. This matches the fail-fast principle and
-the "do not use silent precedence" decision already made for safe token sources.
+**When `-f` is present, the single-target flags (`-url`, `-n`, `-c`, `-body`, `-expect`, `-H`)
+are rejected with exit code 2.** Not ignored, not merged. This matches the fail-fast principle
+and the "do not use silent precedence" decision already made for credentials. `-expect` matters
+most here: it is required in single-target mode, but the file carries a per-entry
+`expectStatus`, so accepting both would mean two sources for one rule.
 
 ---
 
 ## Implementation implications (for when this is built — not now)
 
-The current single-target engine assumes one URL/method/body, so v0.4 touches:
+The current single-target engine assumes one URL/method/body, so v0.5 touches:
 
 - **Two types, not one.** The struct that mirrors the file is a *parsing* concern; the struct the
   queue carries is a *runtime* concern. Keep `json.RawMessage` out of the second one.
@@ -428,16 +435,18 @@ The current single-target engine assumes one URL/method/body, so v0.4 touches:
   fold into a `map[string]Summary` (or `[]NamedSummary`) keyed by name. One `latencyHistogram`
   per name — the type is already a self-contained value with no global state, so this composes.
 
-- **The public result type becomes a collection** of named summaries. This is a v0.4 API
+- **The public result type becomes a collection** of named summaries. This is a v0.5 API
   addition — design it alongside, don't retrofit the single `Summary` awkwardly.
 
-- **Success classification moves.** It is currently `status < 500`; it becomes "matches
-  `expectStatus` when set, else `status < 500`".
+- **Success classification moves scope, not shape.** `v0.4.0` makes it
+  `status == Config.Expect` for the whole run; here it becomes per entry, so the comparison
+  value travels with the request rather than with the run.
 
 **No remaining prerequisites.** Every blocker listed in the original version of this document
-is now closed: streaming aggregation shipped in `v0.2.0`, custom request headers (issue #7)
-shipped in `v0.3.0` — so the `headers` key this schema references is already supported by the
-engine — and error-key normalization is done.
+is now closed: streaming aggregation shipped in `v0.2.0`, custom request headers (issue #7) in
+`v0.3.0`, and required expected-status matching in `v0.4.0` — so the `headers` and
+`expectStatus` keys this schema references are already supported by the engine, the latter at
+run scope — and error-key normalization is done.
 
 ---
 
@@ -497,7 +506,7 @@ breach statelessness the way full templating would.
 
 ---
 
-## Explicitly out of scope (do not build in v0.4)
+## Explicitly out of scope (do not build in v0.5)
 
 - Value templating (`{{seq}}` / `{{uuid}}` in url/body).
 - Response-body capture / JSON-path extraction.
@@ -506,7 +515,7 @@ breach statelessness the way full templating would.
 
 These only become necessary for the *server-assigns-the-id* seeding case, and the
 "seed outside the tool with known IDs" decision above removes that need. Revisit only if a
-concrete requirement forces it after v0.4.
+concrete requirement forces it after v0.5.
 
 ---
 
