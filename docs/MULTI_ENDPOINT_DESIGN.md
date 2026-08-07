@@ -3,7 +3,7 @@
 **Status:** proposal / design record. Nothing here is implemented. This is the agreed shape
 for the milestone *after* `v0.4.0` (required expected status).
 
-> The version number has moved twice: this was written targeting v0.2, which went to the
+> The version number has moved three times: this was written targeting v0.2, which went to the
 > bounded-memory histogram release, then v0.3, which went to custom request headers, then v0.4,
 > which went to required expected status. It is now v0.5. The README roadmap deliberately no
 > longer names a version, so it cannot drift again — only this heading has to be corrected.
