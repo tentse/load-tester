@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -643,6 +644,101 @@ func TestStatusMatchesExpectStatus(t *testing.T) {
 			assertEqual(t, "total", got.Total, tc.want.Total)
 			assertEqual(t, "succeeded", got.Succeeded, tc.want.Succeeded)
 			assertEqual(t, "failed", got.Failed, tc.want.Failed)
+		})
+	}
+}
+
+func TestErrorsMapCountConsistentWithTotal(t *testing.T) {
+	tests := []struct {
+		name         string
+		apiResponses []struct {
+			status         int
+			expectedStatus int
+			err            error
+		}
+		total int
+		want  int
+	}{
+		{
+			name:  "all err not nil",
+			total: 2,
+			want:  2,
+			apiResponses: []struct {
+				status         int
+				expectedStatus int
+				err            error
+			}{
+				{
+					err:            context.DeadlineExceeded,
+					status:         100,
+					expectedStatus: 200,
+				},
+				{
+					err:            syscall.ECONNREFUSED,
+					status:         100,
+					expectedStatus: 200,
+				},
+			},
+		},
+		{
+			name:  "all err nil",
+			total: 2,
+			want:  2,
+			apiResponses: []struct {
+				status         int
+				expectedStatus int
+				err            error
+			}{
+				{
+					err:            nil,
+					status:         100,
+					expectedStatus: 200,
+				},
+				{
+					err:            nil,
+					status:         100,
+					expectedStatus: 200,
+				},
+			},
+		},
+		{
+			name:  "1 api response error = nil",
+			total: 2,
+			want:  2,
+			apiResponses: []struct {
+				status         int
+				expectedStatus int
+				err            error
+			}{
+				{
+					err:            nil,
+					status:         100,
+					expectedStatus: 200,
+				},
+				{
+					err:            syscall.ECONNREFUSED,
+					status:         100,
+					expectedStatus: 200,
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			statusTracker := statusTracker{Errors: map[string]int{}}
+			for _, apiResponse := range tc.apiResponses {
+				statusTracker.UpdateErrors(apiResponse.status, apiResponse.expectedStatus, apiResponse.err)
+			}
+
+			totalErrorsCounted := 0
+			for _, value := range statusTracker.Errors {
+				totalErrorsCounted += value
+			}
+
+			if tc.want != totalErrorsCounted {
+				t.Errorf("got total error count: %d with error map: %v, want total error count: %d", totalErrorsCounted, statusTracker.Errors, tc.want)
+			}
 		})
 	}
 }

@@ -114,8 +114,7 @@ func (s *statusTracker) UpdateErrors(status, expect int, err error) {
 	defer s.mu.Unlock()
 	if err != nil {
 		s.Errors[classifyFailure(err)]++
-	}
-	if status != expect {
+	} else if status != expect {
 		s.Errors[statusErrText(status)]++
 	}
 }
