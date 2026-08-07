@@ -240,10 +240,5 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 		close(latencies)
 	}()
 
-	var collectedLatencies []time.Duration
-	for res := range latencies {
-		collectedLatencies = append(collectedLatencies, res)
-	}
-
 	return summarize(&lh, time.Since(elapsedStart), statusTracker.Total, statusTracker.Succeeded, statusTracker.Failed, statusTracker.Errors), ctx.Err()
 }
