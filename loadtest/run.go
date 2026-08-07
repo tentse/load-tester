@@ -205,7 +205,6 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 
 	jobs := make(chan struct{})
 	lh := latencyHistogram{}
-	latencies := make(chan time.Duration)
 
 	r := newRunner(config.Timeout)
 	defer r.client.CloseIdleConnections()
@@ -235,15 +234,7 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 		}()
 	}
 
-	go func() {
-		wg.Wait()
-		close(latencies)
-	}()
-
-	var collectedLatencies []time.Duration
-	for res := range latencies {
-		collectedLatencies = append(collectedLatencies, res)
-	}
+	wg.Wait()
 
 	return summarize(&lh, time.Since(elapsedStart), statusTracker.Total, statusTracker.Succeeded, statusTracker.Failed, statusTracker.Errors), ctx.Err()
 }
