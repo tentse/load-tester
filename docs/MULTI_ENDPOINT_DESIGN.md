@@ -103,13 +103,17 @@ It warns rather than rejects because legitimate cases exist: DELETE-as-consume
 
 ### 5. `expectStatus` per entry
 
-Success is currently "completed, and status < 500". That is too loose for a multi-endpoint file
-where you know what each endpoint *should* return. `POST /users` answering `200` instead of
-`201`, or `403` instead of `201`, currently counts as a success and inflates the numbers.
+> **Partly shipped.** The single-target engine gained this in `v0.3.0` as the required `-expect`
+> flag and `Config.Expect`; success there is now `status == Expect`, and the old `status < 500`
+> rule is gone. What remains for this milestone is making the expectation **per entry** rather
+> than per run.
 
-`expectStatus` makes the expectation explicit. A mismatch is a **failure**, so it lands in
-`Failed` and `Errors` and is excluded from the latency histogram — which matters because
-percentiles are computed over successful requests only.
+Per-run is too coarse for a multi-endpoint file, where each endpoint has its own correct answer:
+one `-expect` cannot be simultaneously `201` for a create and `204` for a delete.
+
+`expectStatus` makes the expectation explicit per entry. A mismatch is a **failure**, so it
+lands in `Failed` and `Errors` and is excluded from the latency histogram — which matters
+because percentiles are computed over successful requests only.
 
 This is what makes authentication testing expressible: an entry with an expired token and
 `"expectStatus": 401` asserts that rejection keeps working under load.
@@ -311,7 +315,7 @@ Produces **7 summaries from 811 requests**: `search` 50 (two variants merged), `
 | `bodyFile` | string, optional | Path, read once at startup. Excludes `body`. |
 | `headers` | map, optional | Sent as written. `${ENV}` resolved at load. Carries credentials. |
 | `count` | int, optional | Defaults to 1. Warns if raised on DELETE. |
-| `expectStatus` | int, optional | Mismatch is a failure, not a success. |
+| `expectStatus` | int, **required** | Mismatch is a failure, not a success. Required per entry, matching the single-target `-expect`. |
 
 ---
 
@@ -351,9 +355,11 @@ loadtester -f -            # read the file from stdin
 Stdin support is a few lines and fits the generate-then-run workflow the docs strategy is built
 around — no temp file needed.
 
-**When `-f` is present, the single-target flags (`-url`, `-n`, `-c`, `-body`, `-token`) are
-rejected with exit code 2.** Not ignored, not merged. This matches the fail-fast principle and
-the "do not use silent precedence" decision already made for safe token sources.
+**When `-f` is present, the single-target flags (`-url`, `-n`, `-c`, `-body`, `-expect`, `-H`)
+are rejected with exit code 2.** Not ignored, not merged. This matches the fail-fast principle
+and the "do not use silent precedence" decision already made for credentials. `-expect` matters
+most here: it is required in single-target mode, but the file carries a per-entry
+`expectStatus`, so accepting both would mean two sources for one rule.
 
 ---
 
@@ -431,13 +437,15 @@ The current single-target engine assumes one URL/method/body, so v0.4 touches:
 - **The public result type becomes a collection** of named summaries. This is a v0.4 API
   addition — design it alongside, don't retrofit the single `Summary` awkwardly.
 
-- **Success classification moves.** It is currently `status < 500`; it becomes "matches
-  `expectStatus` when set, else `status < 500`".
+- **Success classification moves scope, not shape.** `v0.3.0` already made it
+  `status == Config.Expect` for the whole run; here it becomes per entry, so the comparison
+  value travels with the request rather than with the run.
 
 **No remaining prerequisites.** Every blocker listed in the original version of this document
-is now closed: streaming aggregation shipped in `v0.2.0`, custom request headers (issue #7)
-shipped in `v0.3.0` — so the `headers` key this schema references is already supported by the
-engine — and error-key normalization is done.
+is now closed: streaming aggregation shipped in `v0.2.0`; custom request headers (issue #7) and
+required expected-status matching both shipped in `v0.3.0` — so the `headers` and
+`expectStatus` keys this schema references are already supported by the engine, the latter at
+run scope — and error-key normalization is done.
 
 ---
 
