@@ -3,10 +3,12 @@ package loadtest
 import (
 	"context"
 	"errors"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -396,7 +398,7 @@ func TestRunClosesIdleConnections(t *testing.T) {
 	}
 }
 
-func TestWorkersUpdatingLatencyHistogramValue(t *testing.T) {
+func TestConcurrentlyUpdatingLatencyHistogramValue(t *testing.T) {
 	wantedTotal := 1000
 	lh := latencyHistogram{}
 
@@ -416,7 +418,7 @@ func TestWorkersUpdatingLatencyHistogramValue(t *testing.T) {
 	}
 }
 
-func TestWorkersUpdatingStatusTrackerValue(t *testing.T) {
+func TestConcurrentlyUpdatingStatusTrackerValue(t *testing.T) {
 	wantedSucceededCount := 1000
 	statusTracker := statusTracker{}
 
@@ -741,4 +743,113 @@ func TestErrorsMapCountConsistentWithTotal(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFileRun(t *testing.T) {
+	mockOkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockOkServer.Close()
+	mockInternalServerErrorServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer mockInternalServerErrorServer.Close()
+
+	tests := []struct {
+		name       string
+		fileConfig FileConfig
+		want       map[string]Summary
+	}{
+		{
+			name: "first request: 200(5), 500(2). second request: 200(5)",
+			fileConfig: FileConfig{
+				Version:     1,
+				BaseURL:     "",
+				Concurrency: 10,
+				Timeout:     1 * time.Second,
+				Requests: []RequestSpec{
+					{
+						Name:   "first",
+						URL:    mockOkServer.URL,
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  5,
+						Expect: 200,
+					},
+					{
+						Name:   "second",
+						URL:    mockOkServer.URL,
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  2,
+						Expect: 200,
+					},
+					{
+						Name:   "first", // first: getting two request internal server error
+						URL:    mockInternalServerErrorServer.URL,
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  2,
+						Expect: 200,
+					},
+					{
+						Name:   "second", //second: with some addition of query parameter.
+						URL:    mockOkServer.URL,
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  3,
+						Expect: 200,
+					},
+				},
+			},
+			want: map[string]Summary{
+				"first": Summary{
+					Total:     7,
+					Succeeded: 5,
+					Failed:    2,
+					Errors: map[string]int{
+						statusErrText(http.StatusInternalServerError): 2,
+					},
+				},
+				"second": Summary{
+					Total:     5,
+					Succeeded: 5,
+					Failed:    0,
+					Errors:    map[string]int{},
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := FileRun(t.Context(), tc.fileConfig)
+
+			if err != nil {
+				t.Fatalf("expected err nil, got error: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d summaries, want %d (names: %v)", len(got), len(tc.want), slices.Sorted(maps.Keys(got)))
+			}
+
+			for name, want := range tc.want {
+				g, ok := got[name]
+				if !ok {
+					t.Errorf("missing summary for %q", name)
+					continue
+				}
+				assertEqual(t, name+" total", g.Total, want.Total)
+				assertEqual(t, name+" succeeded", g.Succeeded, want.Succeeded)
+				assertEqual(t, name+" failed", g.Failed, want.Failed)
+				if !maps.Equal(g.Errors, want.Errors) {
+					t.Errorf("%s errors: got %v, want %v", name, g.Errors, want.Errors)
+				}
+			}
+		})
+	}
+
 }

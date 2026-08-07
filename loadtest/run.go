@@ -238,3 +238,34 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 
 	return summarize(&lh, time.Since(elapsedStart), statusTracker.Total, statusTracker.Succeeded, statusTracker.Failed, statusTracker.Errors), ctx.Err()
 }
+
+type RequestSpec struct {
+	Name   string
+	URL    string
+	Method string
+	Header http.Header
+	Body   string
+	Count  int
+	Expect int
+}
+
+type FileConfig struct {
+	Version     int
+	BaseURL     string
+	Concurrency int
+	Timeout     time.Duration
+	Requests    []RequestSpec
+}
+
+type aggregator struct {
+	lh *latencyHistogram
+	st *statusTracker
+}
+
+func (r *runner) fileWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-chan RequestSpec, aggs map[string]*aggregator) {
+	return
+}
+
+func FileRun(ctx context.Context, cfg FileConfig) (map[string]Summary, error) {
+	return nil, nil
+}
