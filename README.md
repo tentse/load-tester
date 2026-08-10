@@ -6,11 +6,11 @@
 
 A small HTTP load tester written in Go. Point it at a URL, tell it how many requests to send
 and how many to run at once, and it tells you how the target held up — throughput, latency
-percentiles, and a breakdown of whatever went wrong.
+percentiles, the full latency distribution, and a breakdown of whatever went wrong.
 
-It's a library as well as a command. The public API (`Config`, `Run`, `Summary`) lives in an
-importable `loadtest` package, so you can drive load tests from your own Go code instead of
-shelling out to a binary.
+It's a library as well as a command. The public API (`Config`, `Run`, `Summary`, `Bucket`)
+lives in an importable `loadtest` package, so you can drive load tests from your own Go code
+instead of shelling out to a binary.
 
 The production code uses **nothing but the Go standard library**. That's a deliberate
 constraint, not an accident — the whole point was to learn Go's concurrency model properly
@@ -57,6 +57,21 @@ Throughput: 2006.26 req/s
 P50: <= 5ms
 P90: <= 10ms
 P99: <= 200ms
+  bucket       count
+  <1ms             0
+  1–2ms           40   █████▏
+  2–5ms          260   ██████████████████████████████████
+  5–10ms         155   ████████████████████▎
+  10–20ms         30   ███▉
+  20–50ms          6   ▊
+  50–100ms         3   ▍
+  100–200ms        5   ▋
+  200–500ms        1   ▏
+  500ms–1s         0
+  1–2s             0
+  2–5s             0
+  5–10s            0
+  ≥10s             0
 Errors:
 n/a
 ```
@@ -152,6 +167,11 @@ request rate — throughput is whatever the target can absorb.
   bound** of a latency bucket and printed with a leading `<=`, so read `P99: <= 200ms` as "99%
   of successful requests finished in under 200ms" — see
   [How latencies are aggregated](#how-latencies-are-aggregated) below.
+- **The bucket ladder** — the counts behind those percentiles, one row per bucket. Three numbers
+  cannot tell you whether the slow requests trail off gently or jump straight to very slow; the
+  ladder can. It prints on every run that had at least one success, and is not printed at all
+  when nothing succeeded — see
+  [How latencies are aggregated](#how-latencies-are-aggregated) below.
 - **Errors** — safe, stable failure categories grouped by how often they occurred, most
   frequent first. A request that came back with the wrong status is listed under that status's
   name, so under `-expect 200` a run against a missing path reads `not found: 500`. Requests
@@ -167,19 +187,19 @@ A run can send millions of requests, so keeping every latency in memory does not
 Instead, each successful request's latency is counted into one of 14 fixed buckets, and only
 the counters are kept — the individual timings are discarded as they arrive.
 
-Here is the full ladder, holding the counters behind the 500-request run shown in
-[Quick start](#quick-start). These are internal counts, not printed output:
+Every run prints the full ladder under its percentiles. Here it is again from the 500-request
+run shown in [Quick start](#quick-start):
 
 ```
   bucket       count
   <1ms             0
-  1–2ms           40   ████
-  2–5ms          260   ██████████████████████████
-  5–10ms         155   ███████████████
-  10–20ms         30   ███
-  20–50ms          6   ▌
-  50–100ms         3   ▎
-  100–200ms        5   ▌
+  1–2ms           40   █████▏
+  2–5ms          260   ██████████████████████████████████
+  5–10ms         155   ████████████████████▎
+  10–20ms         30   ███▉
+  20–50ms          6   ▊
+  50–100ms         3   ▍
+  100–200ms        5   ▋
   200–500ms        1   ▏
   500ms–1s         0
   1–2s             0
@@ -187,6 +207,13 @@ Here is the full ladder, holding the counters behind the 500-request run shown i
   5–10s            0
   ≥10s             0
 ```
+
+Each bar is sized against the busiest bucket rather than against a fixed number of requests, so
+the longest bar is always 34 characters wide and the picture looks the same whether the run sent
+500 requests or 50 million. Any bucket with at least one request in it always draws something,
+down to a one-eighth sliver of a character, so a single slow request never disappears into a
+blank row. The counts cover **successful requests only**, so on a run with failures they add up
+to `Succeeded` rather than `Total`.
 
 Buckets are half-open: `[1ms, 2ms)` includes exactly 1ms and excludes 2ms. Every latency
 therefore lands in exactly one bucket, and the counts always sum to the number of successful
@@ -250,11 +277,26 @@ func main() {
 	}
 
 	fmt.Printf("%d/%d succeeded, p99 %v\n", summary.Succeeded, summary.Total, summary.P99)
+
+	for _, bucket := range summary.Buckets {
+		if bucket.Count > 0 {
+			fmt.Printf("%-10s %d\n", bucket.Label(), bucket.Count)
+		}
+	}
 }
 ```
 
 `Expect` is required here exactly as `-expect` is on the command line — a `Config` that leaves
 it at zero fails validation rather than defaulting to anything.
+
+`Summary.Buckets` gives you the same latency breakdown the command prints, but as data instead
+of text. There is one [`Bucket`](https://pkg.go.dev/github.com/tentse/load-tester/loadtest#Bucket)
+per step of the ladder, from fastest to slowest. `Lo` and `Hi` are the start and end of the
+range, and `Count` is how many successful requests landed in it. `Lo` is part of the range and
+`Hi` is not, and the last bucket has no upper limit, so it reports an `Hi` of zero.
+`Bucket.Label` gives you the name the command prints, so the 500ms to 1s bucket reads
+`500ms–1s`. The counts add up to `Succeeded`, not `Total`. Drawing the bars is left to the
+command.
 
 `Run` honors context cancellation: cancel the context and it stops scheduling work, waits for
 in-flight requests, and returns the partial `Summary` along with `ctx.Err()`. A `Config` that
@@ -277,7 +319,9 @@ Honest about what the tool does not do yet. Each of these is planned work, not a
   buckets — `<1ms`, `1–2ms`, `2–5ms`, `5–10ms`, and so on up to `≥10s` — so a reported
   percentile is the upper bound of its bucket and can overstate the true latency by up to
   about 2.5×. Precision is also capped by `-n`: percentiles resolve only in steps of `1/n`,
-  so a p99 from a 100-request run rests on a single observation.
+  so a p99 from a 100-request run rests on a single observation. The printed ladder at least
+  shows you how rough the number is: you can see how many requests sit in the bucket a
+  percentile landed in, and how wide that bucket is.
 - **Secrets on the command line are visible** in your shell history and to anyone who can run
   `ps` while the test is running. This covers a credential passed via `-H`, and equally a key
   embedded in `-url`. Prefer a shell variable that you clear afterwards.

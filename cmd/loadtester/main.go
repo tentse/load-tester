@@ -134,6 +134,8 @@ func getSummaryText(summary loadtest.Summary) string {
 		)
 	}
 
+	b.WriteString(renderHistogram(summary.Buckets))
+
 	errors := make([]errorCount, 0, len(summary.Errors))
 
 	for message, count := range summary.Errors {

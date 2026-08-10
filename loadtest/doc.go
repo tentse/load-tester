@@ -69,9 +69,9 @@
 // The buckets are half-open, so [1ms, 2ms) includes exactly 1ms and excludes
 // 2ms, and every latency lands in exactly one of them:
 //
-//	<1ms      1-2ms     2-5ms      5-10ms     10-20ms
-//	20-50ms   50-100ms  100-200ms  200-500ms  500ms-1s
-//	1-2s      2-5s      5-10s      >=10s
+//	<1ms      1–2ms     2–5ms      5–10ms     10–20ms
+//	20–50ms   50–100ms  100–200ms  200–500ms  500ms–1s
+//	1–2s      2–5s      5–10s      ≥10s
 //
 // They are multiplicative rather than evenly spaced, each roughly 2 to 2.5 times
 // the width of the last, because latency is skewed: evenly spaced buckets would
@@ -83,4 +83,11 @@
 // bounds listed above, except when the percentile falls in the final open-ended
 // bucket, where the largest observed latency is reported instead. Memory is
 // constant, but a percentile is only known to the width of the bucket it lands in.
+//
+// The counts themselves are reported in Summary.Buckets, one [Bucket] per step in
+// the order listed above, so you can see how the latencies were spread out
+// instead of only three numbers taken from them. [Bucket.Label] writes a bucket's
+// name exactly as it is listed above. The counts add up to Summary.Succeeded and
+// not Summary.Total, because only successful requests are timed. The loadtester
+// command prints the ladder under its percentiles.
 package loadtest
