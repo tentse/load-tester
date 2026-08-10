@@ -236,7 +236,10 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 
 	wg.Wait()
 
-	return summarize(&lh, time.Since(elapsedStart), statusTracker.Total, statusTracker.Succeeded, statusTracker.Failed, statusTracker.Errors), ctx.Err()
+	summary := summarize(&lh, time.Since(elapsedStart), statusTracker.Total, statusTracker.Succeeded, statusTracker.Failed, statusTracker.Errors)
+	summary.Buckets = buckets(&lh)
+
+	return summary, ctx.Err()
 }
 
 type RequestSpec struct {

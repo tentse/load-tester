@@ -15,8 +15,9 @@ const (
 
 // Summary reports the completed portion of a load test.
 //
-// A request succeeds when it completes without an error and its HTTP status is
-// less than 500. Request errors and statuses of 500 or greater are failures.
+// A request succeeds when it completes without a transport error and its HTTP
+// status is exactly Config.Expect. Every other status is a failure, as is any
+// request that never completed.
 //
 // Total counts completed request attempts, so it can be less than Config.Requests
 // after cancellation. Elapsed is the wall-clock run duration. Throughput is
@@ -30,6 +31,9 @@ const (
 // connection refused, connection reset, unexpected EOF, or request failed.
 // Raw transport error text, URL user information, and URL query values are not
 // included in these error keys.
+//
+// Buckets holds the same latency counts the percentiles are read from, one entry
+// per step of the ladder, from fastest to slowest. The counts add up to Succeeded.
 type Summary struct {
 	Total      int
 	Succeeded  int
@@ -39,6 +43,7 @@ type Summary struct {
 	P50        time.Duration
 	P90        time.Duration
 	P99        time.Duration
+	Buckets    []Bucket
 	Errors     map[string]int
 }
 

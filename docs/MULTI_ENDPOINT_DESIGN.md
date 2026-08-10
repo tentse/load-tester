@@ -1,14 +1,15 @@
-# Design notes: multi-endpoint JSON load tests (v0.5)
+# Design notes: multi-endpoint JSON load tests (v0.6)
 
 **Status:** proposal / design record. Nothing here is implemented. This is the agreed shape
-for the milestone *after* `v0.4.0` (required expected status).
+for the milestone *after* `v0.5.0` (printed latency ladder).
 
-> The version number has moved three times: this was written targeting v0.2, which went to the
-> bounded-memory histogram release, then v0.3, which went to custom request headers, then v0.4,
-> which went to required expected status. It is now v0.5. The README roadmap deliberately no
-> longer names a version, so it cannot drift again — only this heading has to be corrected.
+> The version number has moved four times: this was written targeting v0.2, which went to
+> counting latencies into buckets, then v0.3, which went to custom request headers, then v0.4,
+> which went to required expected status, then v0.5, which went to printing that bucket ladder.
+> It is now v0.6. The README roadmap deliberately no longer names a version, so it cannot drift
+> again — only this heading has to be corrected.
 
-**Scope boundary (hard):** v0.5 stays **stateless and fire-and-forget**, exactly like today's
+**Scope boundary (hard):** v0.6 stays **stateless and fire-and-forget**, exactly like today's
 engine. No value templating, no response capture, no request chaining, no ordered phases. Those
 are deliberately *out of scope* — see "Explicitly out of scope" at the bottom.
 
@@ -60,8 +61,13 @@ workers drain it. The workers don't care which endpoint a job belongs to.
 ### 3. One `Summary` per `name`
 
 Each name reports its own `Succeeded` / `Failed` / `Throughput` / `P50` / `P90` / `P99` /
-`Errors`, computed over all requests carrying that name (across every variant and every
-`count`). An overall roll-up across all names is optional and can be added later.
+`Errors` / `Buckets`, computed over all requests carrying that name (across every variant and
+every `count`). An overall roll-up across all names is optional and can be added later.
+
+`Buckets` is per name for the same reason the percentiles are: a single ladder across every
+endpoint would mix a fast health check together with a slow search, and the result would
+describe neither one. That does mean the command prints a ladder per name, so the output gets
+longer as the file grows — worth weighing against printing the ladder only for the roll-up.
 
 ### 4. Per-entry `count` (default 1) for weighting
 
@@ -218,7 +224,7 @@ fails the run before any load is generated.
 
 ### 8. No `defaults` block — for now
 
-Considered and dropped for v0.5. Dropping it deletes two rules from the format — per-key merge,
+Considered and dropped for v0.6. Dropping it deletes two rules from the format — per-key merge,
 and a `null` sentinel to remove an inherited key — and keeps every entry fully self-describing
 when read in isolation.
 
@@ -245,7 +251,7 @@ A representative instance:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/tentse/load-tester/v0.5.0/schema/requests.schema.json",
+  "$schema": "https://raw.githubusercontent.com/tentse/load-tester/v0.6.0/schema/requests.schema.json",
   "version": 1,
 
   "baseUrl": "https://staging.example.com",
@@ -366,7 +372,7 @@ most here: it is required in single-target mode, but the file carries a per-entr
 
 ## Implementation implications (for when this is built — not now)
 
-The current single-target engine assumes one URL/method/body, so v0.5 touches:
+The current single-target engine assumes one URL/method/body, so v0.6 touches:
 
 - **Two types, not one.** The struct that mirrors the file is a *parsing* concern; the struct the
   queue carries is a *runtime* concern. Keep `json.RawMessage` out of the second one.
@@ -435,7 +441,7 @@ The current single-target engine assumes one URL/method/body, so v0.5 touches:
   fold into a `map[string]Summary` (or `[]NamedSummary`) keyed by name. One `latencyHistogram`
   per name — the type is already a self-contained value with no global state, so this composes.
 
-- **The public result type becomes a collection** of named summaries. This is a v0.5 API
+- **The public result type becomes a collection** of named summaries. This is a v0.6 API
   addition — design it alongside, don't retrofit the single `Summary` awkwardly.
 
 - **Success classification moves scope, not shape.** `v0.4.0` makes it
@@ -506,7 +512,7 @@ breach statelessness the way full templating would.
 
 ---
 
-## Explicitly out of scope (do not build in v0.5)
+## Explicitly out of scope (do not build in v0.6)
 
 - Value templating (`{{seq}}` / `{{uuid}}` in url/body).
 - Response-body capture / JSON-path extraction.
@@ -515,7 +521,7 @@ breach statelessness the way full templating would.
 
 These only become necessary for the *server-assigns-the-id* seeding case, and the
 "seed outside the tool with known IDs" decision above removes that need. Revisit only if a
-concrete requirement forces it after v0.5.
+concrete requirement forces it after v0.6.
 
 ---
 
