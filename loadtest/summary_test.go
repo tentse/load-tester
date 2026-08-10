@@ -204,12 +204,18 @@ func TestSummary(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 
 			lh := latencyHistogram{}
+			st := statusTracker{
+				Total:     tc.total,
+				Succeeded: tc.total,
+				Failed:    tc.failed,
+				Errors:    tc.errors,
+			}
 
 			for _, value := range tc.latencies {
 				lh.observe(value)
 			}
 
-			got := summarize(&lh, tc.elapsed, tc.total, tc.succeeded, tc.failed, tc.errors)
+			got := summarize(&lh, tc.elapsed, &st)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("summarize() = %+v, want %+v", got, tc.want)
 			}

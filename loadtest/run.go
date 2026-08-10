@@ -236,7 +236,7 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 
 	wg.Wait()
 
-	summary := summarize(&lh, time.Since(elapsedStart), statusTracker.Total, statusTracker.Succeeded, statusTracker.Failed, statusTracker.Errors)
+	summary := summarize(&lh, time.Since(elapsedStart), &statusTracker)
 	summary.Buckets = buckets(&lh)
 
 	return summary, ctx.Err()
@@ -266,9 +266,81 @@ type aggregator struct {
 }
 
 func (r *runner) fileWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-chan RequestSpec, aggs map[string]*aggregator) {
-	return
+	defer wg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case request, ok := <-jobs:
+			if !ok {
+				return
+			}
+			start := time.Now()
+			status, err := r.hit(ctx, request.Method, request.URL, request.Body, request.Header)
+			agg, ok := aggs[request.Name]
+			if !ok || agg == nil {
+				continue
+			}
+			agg.st.IncTotal()
+			if err != nil || status != request.Expect {
+				agg.st.IncFailed()
+				agg.st.UpdateErrors(status, request.Expect, err)
+			} else {
+				agg.st.IncSucceeded()
+				latency := time.Since(start)
+				agg.lh.observe(latency)
+			}
+		}
+
+	}
 }
 
 func FileRun(ctx context.Context, cfg FileConfig) (map[string]Summary, error) {
-	return nil, nil
+
+	jobs := make(chan RequestSpec)
+	aggs := map[string]*aggregator{}
+
+	for _, request := range cfg.Requests {
+		if _, ok := aggs[request.Name]; !ok {
+			aggs[request.Name] = &aggregator{
+				lh: &latencyHistogram{},
+				st: &statusTracker{Errors: map[string]int{}},
+			}
+		}
+	}
+
+	elapsedStart := time.Now()
+
+	go func() {
+		defer close(jobs)
+		for _, request := range cfg.Requests {
+			request.URL = cfg.BaseURL + request.URL
+			for i := 1; i <= request.Count; i++ {
+				select {
+				case <-ctx.Done():
+					return
+				case jobs <- request:
+				}
+			}
+		}
+	}()
+
+	r := newRunner(cfg.Timeout)
+	defer r.client.CloseIdleConnections()
+
+	var wg sync.WaitGroup
+	for i := 1; i <= cfg.Concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			r.fileWorker(ctx, &wg, jobs, aggs)
+		}()
+	}
+
+	wg.Wait()
+
+	summaries := make(map[string]Summary)
+	for name, value := range aggs {
+		summaries[name] = summarize(value.lh, time.Since(elapsedStart), value.st)
+	}
+	return summaries, ctx.Err()
 }
