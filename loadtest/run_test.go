@@ -853,3 +853,126 @@ func TestFileRun(t *testing.T) {
 	}
 
 }
+
+func TestFileRunCancellation(t *testing.T) {
+
+	started := make(chan struct{}, 1)
+
+	okMockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-req.Context().Done()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer okMockServer.Close()
+	cfg := FileConfig{
+		Version:     1,
+		BaseURL:     "",
+		Concurrency: 1,
+		Timeout:     1 * time.Second,
+		Requests: []RequestSpec{
+			{
+				Name:   "first",
+				URL:    okMockServer.URL,
+				Method: http.MethodGet,
+				Header: http.Header{},
+				Count:  1,
+				Body:   "",
+				Expect: 200,
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	type runResult struct {
+		summary map[string]Summary
+		err     error
+	}
+	finished := make(chan runResult, 1)
+	go func() {
+		summary, err := FileRun(ctx, cfg)
+		finished <- runResult{summary: summary, err: err}
+	}()
+
+	select {
+	case <-started:
+		cancel()
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Request not fired even after 500 milliseconds")
+	}
+
+	select {
+	case got := <-finished:
+		if got.err == nil {
+			t.Fatalf("expected context cancellation error, got summary -> %+v, err -> %v", got.summary, got.err)
+		}
+		if !errors.Is(got.err, context.Canceled) {
+			t.Errorf("expected context cancellation message, got %v", got.err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Run did not return promptly after cancellation")
+	}
+}
+
+func TestFileRunClosesIdleConnections(t *testing.T) {
+	idle := make(chan struct{}, 1)
+	closed := make(chan struct{}, 1)
+
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateIdle:
+			select {
+			case idle <- struct{}{}:
+			default:
+			}
+		case http.StateClosed:
+			select {
+			case closed <- struct{}{}:
+			default:
+			}
+		}
+	}
+
+	server.Start()
+	defer server.Close()
+
+	_, err := FileRun(t.Context(), FileConfig{
+		Version:     1,
+		BaseURL:     "",
+		Concurrency: 1,
+		Timeout:     1 * time.Second,
+		Requests: []RequestSpec{
+			{
+				Name:   "first",
+				URL:    server.URL,
+				Method: http.MethodGet,
+				Header: http.Header{},
+				Count:  1,
+				Body:   "",
+				Expect: 200,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("got err = %q, want = nil", err.Error())
+	}
+
+	select {
+	case <-idle:
+	case <-time.After(defaultTimeout):
+		t.Fatal("connection never became idle")
+	}
+	select {
+	case <-closed:
+	case <-time.After(defaultTimeout):
+		t.Fatal("run returned without closing the idle connection")
+	}
+}
