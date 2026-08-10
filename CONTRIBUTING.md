@@ -74,9 +74,11 @@ Concretely, for a PR:
 Please don't "fix" these without discussion — they are decisions, and changing them changes
 the public contract:
 
-- A `4xx` response counts as a **success**. The server responded, which is what is being
-  measured.
-- Percentiles cover **successful requests only**, so failures cannot flatter the numbers.
+- A response counts as a **success** only when its status is exactly `Config.Expect`. Every
+  other status is a failure, so under `-expect 200` a `404` is a failure — the server answered,
+  but not with what was asked for.
+- Percentiles and the bucket ladder cover **successful requests only**, so failures cannot
+  flatter the numbers. The ladder's counts therefore sum to `Succeeded`, not `Total`.
 - A run in which every request failed still exits `0`. The load test succeeded; the results
   are in the summary.
 - Cancellation returns a **partial** `Summary` together with `ctx.Err()`, rather than

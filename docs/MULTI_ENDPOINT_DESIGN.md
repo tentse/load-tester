@@ -60,8 +60,13 @@ workers drain it. The workers don't care which endpoint a job belongs to.
 ### 3. One `Summary` per `name`
 
 Each name reports its own `Succeeded` / `Failed` / `Throughput` / `P50` / `P90` / `P99` /
-`Errors`, computed over all requests carrying that name (across every variant and every
-`count`). An overall roll-up across all names is optional and can be added later.
+`Errors` / `Buckets`, computed over all requests carrying that name (across every variant and
+every `count`). An overall roll-up across all names is optional and can be added later.
+
+`Buckets` is per name for the same reason the percentiles are: a single ladder across every
+endpoint would mix a fast health check together with a slow search, and the result would
+describe neither one. That does mean the command prints a ladder per name, so the output gets
+longer as the file grows — worth weighing against printing the ladder only for the roll-up.
 
 ### 4. Per-entry `count` (default 1) for weighting
 
