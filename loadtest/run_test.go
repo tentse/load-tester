@@ -160,7 +160,6 @@ func TestInvalidConfig(t *testing.T) {
 	tests := []struct {
 		name            string
 		cfg             Config
-		want            Summary
 		wantErrContains string
 	}{
 		{
@@ -172,11 +171,6 @@ func TestInvalidConfig(t *testing.T) {
 				Timeout:     time.Duration(10) * time.Second,
 				Method:      "",
 				Expect:      200,
-			},
-			want: Summary{
-				Total:     1,
-				Succeeded: 0,
-				Failed:    1,
 			},
 			wantErrContains: "invalid method",
 		},
@@ -807,7 +801,7 @@ func TestFileRun(t *testing.T) {
 				},
 			},
 			want: map[string]Summary{
-				"first": Summary{
+				"first": {
 					Total:     7,
 					Succeeded: 5,
 					Failed:    2,
@@ -815,7 +809,7 @@ func TestFileRun(t *testing.T) {
 						statusErrText(http.StatusInternalServerError): 2,
 					},
 				},
-				"second": Summary{
+				"second": {
 					Total:     5,
 					Succeeded: 5,
 					Failed:    0,
@@ -848,6 +842,14 @@ func TestFileRun(t *testing.T) {
 				if !maps.Equal(g.Errors, want.Errors) {
 					t.Errorf("%s errors: got %v, want %v", name, g.Errors, want.Errors)
 				}
+
+				assertEqual(t, name+" bucket count", len(g.Buckets), len(bucketEdges)+1)
+
+				var bucketed int64
+				for _, bucket := range g.Buckets {
+					bucketed += bucket.Count
+				}
+				assertEqual(t, name+" bucketed latencies", int(bucketed), want.Succeeded)
 			}
 		})
 	}
@@ -974,5 +976,179 @@ func TestFileRunClosesIdleConnections(t *testing.T) {
 	case <-closed:
 	case <-time.After(defaultTimeout):
 		t.Fatal("run returned without closing the idle connection")
+	}
+}
+
+func TestInvalidFileConfig(t *testing.T) {
+	okMockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer okMockServer.Close()
+	tests := []struct {
+		name            string
+		cfg             FileConfig
+		wantErrContains string
+	}{
+		{
+			name: "empty version",
+			cfg: FileConfig{
+				BaseURL:     okMockServer.URL,
+				Concurrency: 0,
+				Timeout:     1 * time.Second,
+				Requests: []RequestSpec{
+					{
+						Name:   "first",
+						URL:    "",
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  1,
+						Expect: 200,
+					},
+				},
+			},
+			wantErrContains: "version not supported",
+		},
+		{
+			name: "concurrency equals 0",
+			cfg: FileConfig{
+				Version:     1,
+				BaseURL:     okMockServer.URL,
+				Concurrency: 0,
+				Timeout:     1 * time.Second,
+				Requests: []RequestSpec{
+					{
+						Name:   "first",
+						URL:    "",
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  1,
+						Expect: 200,
+					},
+				},
+			},
+			wantErrContains: "invalid concurrency",
+		},
+		{
+			name: "timeout equals 0",
+			cfg: FileConfig{
+				Version:     1,
+				BaseURL:     okMockServer.URL,
+				Concurrency: 1,
+				Timeout:     0,
+				Requests: []RequestSpec{
+					{
+						Name:   "first",
+						URL:    "",
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  1,
+						Expect: 200,
+					},
+				},
+			},
+			wantErrContains: "invalid timeout",
+		},
+		{
+			name: "requests: empty name",
+			cfg: FileConfig{
+				Version:     1,
+				BaseURL:     okMockServer.URL,
+				Concurrency: 1,
+				Timeout:     1 * time.Second,
+				Requests: []RequestSpec{
+					{
+						Name:   "",
+						URL:    "",
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  1,
+						Expect: 200,
+					},
+				},
+			},
+			wantErrContains: "empty name",
+		},
+		{
+			name: "requests: empty baseURL and subURL",
+			cfg: FileConfig{
+				Version:     1,
+				BaseURL:     "",
+				Concurrency: 1,
+				Timeout:     1 * time.Second,
+				Requests: []RequestSpec{
+					{
+						Name:   "first",
+						URL:    "",
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  1,
+						Expect: 200,
+					},
+				},
+			},
+			wantErrContains: "empty baseURL and empty URL",
+		},
+		{
+			name: "requests: count equals 0",
+			cfg: FileConfig{
+				Version:     1,
+				BaseURL:     okMockServer.URL,
+				Concurrency: 1,
+				Timeout:     1 * time.Second,
+				Requests: []RequestSpec{
+					{
+						Name:   "first",
+						URL:    "",
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  0,
+						Expect: 200,
+					},
+				},
+			},
+			wantErrContains: "invalid count",
+		},
+		{
+			name: "requests: exepct equals 0",
+			cfg: FileConfig{
+				Version:     1,
+				BaseURL:     okMockServer.URL,
+				Concurrency: 1,
+				Timeout:     1 * time.Second,
+				Requests: []RequestSpec{
+					{
+						Name:   "first",
+						URL:    "",
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  1,
+						Expect: 0,
+					},
+				},
+			},
+			wantErrContains: "invalid expect",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := FileRun(t.Context(), tc.cfg)
+			if err == nil {
+				t.Fatalf("expected error for test %s, got response -> %+v", tc.name, got)
+			}
+			if !errors.Is(err, ErrInvalidConfig) {
+				t.Errorf("error = %v, want ErrInvalidConfig", err)
+			}
+			if !strings.Contains(err.Error(), tc.wantErrContains) {
+				t.Errorf("error = %q, want it to contain %q", err.Error(), tc.wantErrContains)
+			}
+		})
 	}
 }

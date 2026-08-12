@@ -22,15 +22,14 @@ func (timeoutError) Temporary() bool { return false }
 func TestSummary(t *testing.T) {
 
 	tests := []struct {
-		name           string
-		latencies      []time.Duration
-		partialSummary Summary
-		total          int
-		succeeded      int
-		failed         int
-		errors         map[string]int
-		elapsed        time.Duration
-		want           Summary
+		name      string
+		latencies []time.Duration
+		total     int
+		succeeded int
+		failed    int
+		errors    map[string]int
+		elapsed   time.Duration
+		want      Summary
 	}{
 		{
 			name: "all succeeded with one internal server error",
@@ -206,7 +205,7 @@ func TestSummary(t *testing.T) {
 			lh := latencyHistogram{}
 			st := statusTracker{
 				Total:     tc.total,
-				Succeeded: tc.total,
+				Succeeded: tc.succeeded,
 				Failed:    tc.failed,
 				Errors:    tc.errors,
 			}

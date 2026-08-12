@@ -242,6 +242,18 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 	return summary, ctx.Err()
 }
 
+// RequestSpec is one endpoint of a multi-endpoint load test.
+//
+// Name must be non-empty and is the grouping key. Every spec sharing a Name is reported under a
+// single Summary, so one endpoint can appear more than once with different bodies or headers and
+// still be measured as one thing. Method must be non-empty. URL is appended to
+// FileConfig.BaseURL, so a spec can carry only a path when a base is set.
+//
+// Count must be greater than zero and is how many times to fire this spec. It exists to weight
+// the traffic mix, so a common variant can be sent more often than a rare one. Expect must be
+// greater than zero and is the HTTP status code that counts as a success for this spec, matched
+// exactly, in the same way Config.Expect is for a single target run. Header and Body are optional
+// and are sent as given.
 type RequestSpec struct {
 	Name   string
 	URL    string
@@ -252,6 +264,19 @@ type RequestSpec struct {
 	Expect int
 }
 
+// FileConfig defines one load test spread across several endpoints.
+//
+// Version is the format version of the file the config was read from and must be 1. It is checked
+// so that a later format is rejected with a clear message rather than silently misread.
+//
+// Concurrency and Timeout must be greater than zero. Concurrency is the total number of workers,
+// shared by every entry in Requests rather than given to each one, so adding an endpoint spreads
+// the same pool wider instead of adding load. Timeout applies to each request on its own, not to
+// the run as a whole.
+//
+// Requests holds the endpoints to exercise. BaseURL is optional and is prefixed to every
+// RequestSpec.URL; either BaseURL or each spec's own URL must be non-empty, so entries can carry
+// a path instead of repeating a host.
 type FileConfig struct {
 	Version     int
 	BaseURL     string
@@ -277,10 +302,9 @@ func (r *runner) fileWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-chan
 			}
 			start := time.Now()
 			status, err := r.hit(ctx, request.Method, request.URL, request.Body, request.Header)
+
 			agg, ok := aggs[request.Name]
-			if !ok || agg == nil {
-				continue
-			}
+
 			agg.st.IncTotal()
 			if err != nil || status != request.Expect {
 				agg.st.IncFailed()
@@ -295,7 +319,57 @@ func (r *runner) fileWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-chan
 	}
 }
 
+func validateFileConfig(cfg FileConfig) error {
+
+	if cfg.Version != 1 {
+		return fmt.Errorf("%w: version not supported -> %d", ErrInvalidConfig, cfg.Version)
+	}
+	if cfg.Concurrency <= 0 {
+		return fmt.Errorf("%w: invalid concurrency -> %d", ErrInvalidConfig, cfg.Concurrency)
+	}
+	if cfg.Timeout <= 0 {
+		return fmt.Errorf("%w: invalid timeout -> %v", ErrInvalidConfig, cfg.Timeout)
+	}
+
+	for index, request := range cfg.Requests {
+		if request.Name == "" {
+			return fmt.Errorf("%w: request %d: empty name", ErrInvalidConfig, index)
+		}
+		if cfg.BaseURL == "" && request.URL == "" {
+			return fmt.Errorf("%w: request %d: empty baseURL and empty URL", ErrInvalidConfig, index)
+		}
+		if request.Method == "" {
+			return fmt.Errorf("%w: request %d: invalid method", ErrInvalidConfig, index)
+		}
+		if request.Count <= 0 {
+			return fmt.Errorf("%w: request %d: invalid count -> %d", ErrInvalidConfig, index, request.Count)
+		}
+		if request.Expect <= 0 {
+			return fmt.Errorf("%w: request %d: invalid expect -> %d", ErrInvalidConfig, index, request.Expect)
+		}
+	}
+	return nil
+}
+
+// FileRun executes a load test across several endpoints and reports one Summary per
+// RequestSpec.Name.
+//
+// Every Summary reports the same Elapsed, the wall-clock duration of the whole run, because one
+// worker pool is shared by every endpoint. A name's Throughput is therefore its share of the
+// overall request rate rather than a rate that endpoint could sustain on its own, and the
+// per-name figures sum to the run total. Judge an individual endpoint by its percentiles and
+// Buckets instead.
+//
+// FileRun returns an empty map and an error when cfg fails validation. Individual HTTP request
+// failures are recorded in the Summary they belong to rather than returned as the FileRun error,
+// as in Run. If ctx is canceled, FileRun stops scheduling work, waits for in-flight workers to
+// exit, and returns the partial summaries together with ctx.Err().
 func FileRun(ctx context.Context, cfg FileConfig) (map[string]Summary, error) {
+
+	err := validateFileConfig(cfg)
+	if err != nil {
+		return map[string]Summary{}, err
+	}
 
 	jobs := make(chan RequestSpec)
 	aggs := map[string]*aggregator{}
@@ -314,7 +388,7 @@ func FileRun(ctx context.Context, cfg FileConfig) (map[string]Summary, error) {
 	go func() {
 		defer close(jobs)
 		for _, request := range cfg.Requests {
-			request.URL = cfg.BaseURL + request.URL
+			request.URL = cfg.BaseURL + request.URL // test case pending
 			for i := 1; i <= request.Count; i++ {
 				select {
 				case <-ctx.Done():
@@ -329,18 +403,21 @@ func FileRun(ctx context.Context, cfg FileConfig) (map[string]Summary, error) {
 	defer r.client.CloseIdleConnections()
 
 	var wg sync.WaitGroup
-	for i := 1; i <= cfg.Concurrency; i++ {
+	for range cfg.Concurrency {
 		wg.Add(1)
-		go func() {
-			r.fileWorker(ctx, &wg, jobs, aggs)
-		}()
+		go r.fileWorker(ctx, &wg, jobs, aggs)
 	}
 
 	wg.Wait()
 
+	// measured once, so every name reports the same run duration
+	elapsed := time.Since(elapsedStart)
+
 	summaries := make(map[string]Summary)
-	for name, value := range aggs {
-		summaries[name] = summarize(value.lh, time.Since(elapsedStart), value.st)
+	for name, agg := range aggs {
+		summary := summarize(agg.lh, elapsed, agg.st)
+		summary.Buckets = buckets(agg.lh)
+		summaries[name] = summary
 	}
 	return summaries, ctx.Err()
 }
