@@ -3,6 +3,7 @@ package loadtest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -206,7 +207,7 @@ func TestHitSendsRequest(t *testing.T) {
 			mockServer := httptest.NewServer(checkRequest(t, tc))
 			defer mockServer.Close()
 
-			r := newRunner(tc.timeout)
+			r := newRunner(tc.timeout, defaultIdleConns)
 			got, err := r.hit(t.Context(), tc.httpMethod, mockServer.URL, tc.reqBody, tc.headers)
 
 			if err != nil {
@@ -225,7 +226,7 @@ func TestServerNotReachableError(t *testing.T) {
 	url := mockServer.URL
 	mockServer.Close()
 
-	r := newRunner(defaultTimeout)
+	r := newRunner(defaultTimeout, defaultIdleConns)
 	_, err := r.hit(t.Context(), http.MethodGet, url, "", http.Header{})
 	if err == nil {
 		t.Error("hitting a closed server: want error, got nil")
@@ -237,7 +238,7 @@ func TestHitURLError(t *testing.T) {
 	// Otherwise it reads as magic.
 	url := "%"
 
-	r := newRunner(defaultTimeout)
+	r := newRunner(defaultTimeout, defaultIdleConns)
 	_, err := r.hit(t.Context(), http.MethodGet, url, "", http.Header{})
 
 	if err == nil {
@@ -253,7 +254,7 @@ func TestRequestTimeout(t *testing.T) {
 	defer mockServer.Close()
 
 	timeout := 10 * time.Millisecond
-	r := newRunner(timeout)
+	r := newRunner(timeout, defaultIdleConns)
 	got, err := r.hit(t.Context(), http.MethodGet, mockServer.URL, "", http.Header{})
 
 	if err == nil {
@@ -280,7 +281,7 @@ func TestContextCancellation(t *testing.T) {
 
 	finished := make(chan error, 1)
 	go func() {
-		r := newRunner(defaultTimeout)
+		r := newRunner(defaultTimeout, defaultIdleConns)
 		_, err := r.hit(ctx, http.MethodGet, mockServer.URL, "", http.Header{})
 		finished <- err
 	}()
@@ -338,7 +339,7 @@ func TestResponseBodyError(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	r := newRunner(defaultTimeout)
+	r := newRunner(defaultTimeout, defaultIdleConns)
 
 	_, err := r.hit(t.Context(), http.MethodGet, mockServer.URL, "", http.Header{})
 
@@ -347,5 +348,26 @@ func TestResponseBodyError(t *testing.T) {
 	}
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Errorf("error = %v, want %v", err, io.ErrUnexpectedEOF)
+	}
+}
+
+func TestNewClientPoolSizedToConcurrency(t *testing.T) {
+	tests := []int{1, 10, 500, 5000}
+
+	for _, concurrency := range tests {
+		t.Run(fmt.Sprintf("c=%d", concurrency), func(t *testing.T) {
+			client := newClient(defaultTimeout, concurrency)
+
+			transport, ok := client.Transport.(*http.Transport)
+			if !ok {
+				t.Fatalf("newClient() transport = %T, want *http.Transport", client.Transport)
+			}
+			if transport.MaxIdleConns != concurrency {
+				t.Errorf("MaxIdleConns = %d, want %d", transport.MaxIdleConns, concurrency)
+			}
+			if transport.MaxIdleConnsPerHost != concurrency {
+				t.Errorf("MaxIdleConnsPerHost = %d, want %d", transport.MaxIdleConnsPerHost, concurrency)
+			}
+		})
 	}
 }

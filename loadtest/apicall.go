@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	defaultTimeout      = 1 * time.Second
-	maxIdleConns        = 100
-	maxIdleConnsPerHost = 100
+	defaultTimeout          = 1 * time.Second
+	defaultIdleConns        = 100
+	defaultIdleConnsPerHost = 100
 )
 
 const (
@@ -26,14 +26,14 @@ type runner struct {
 	client *http.Client
 }
 
-func newRunner(timeout time.Duration) *runner {
-	return &runner{client: newClient(timeout)}
+func newRunner(timeout time.Duration, concurrency int) *runner {
+	return &runner{client: newClient(timeout, concurrency)}
 }
 
-func newClient(timeout time.Duration) *http.Client {
+func newClient(timeout time.Duration, concurrency int) *http.Client {
 	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.MaxIdleConns = maxIdleConns
-	t.MaxIdleConnsPerHost = maxIdleConnsPerHost
+	t.MaxIdleConns = concurrency
+	t.MaxIdleConnsPerHost = concurrency
 
 	return &http.Client{
 		Timeout:   timeout,
