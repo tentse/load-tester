@@ -43,6 +43,9 @@ func parseConfig(args []string, stderr io.Writer) (loadtest.Config, error) {
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "loadtester: a small HTTP load tester\n")
 		fmt.Fprintf(fs.Output(), "WARNING: this tool generates load. Only point it at systems you own or have explicit permission to test.\n")
+		fmt.Fprintf(fs.Output(), "\nUsage:\n")
+		fmt.Fprintf(fs.Output(), "  loadtester -url https://example.internal/ -expect 200\n")
+		fmt.Fprintf(fs.Output(), "  loadtester -f requests.json     # several endpoints from a JSON file\n\n")
 		fs.PrintDefaults()
 	}
 	targetURL := fs.String("url", "", "target URL (required)")
@@ -90,6 +93,13 @@ func parseConfig(args []string, stderr io.Writer) (loadtest.Config, error) {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	if hasFileFlag(args) {
+		return runFile(ctx, args, stdout, stderr)
+	}
+	return runSingle(ctx, args, stdout, stderr)
+}
+
+func runSingle(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	config, err := parseConfig(args, stderr)
 	if errors.Is(err, flag.ErrHelp) {
 		return 0

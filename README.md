@@ -81,8 +81,12 @@ you still get a summary of everything that completed.
 
 ## Flags
 
+There are two modes. Pass `-f` to run several endpoints from a JSON file, or use the flags below
+to test a single URL.
+
 | Flag | Default | Meaning |
 |---|---|---|
+| `-f` | *(none)* | JSON file describing several endpoints. Cannot be combined with any flag below |
 | `-url` | *(required)* | Target URL |
 | `-expect` | *(required)* | HTTP status code that counts as a success. Any other status is a failure |
 | `-c` | `10` | Number of concurrent workers |
@@ -92,6 +96,9 @@ you still get a summary of everything that completed.
 | `-H` | *(none)* | Custom request header as `"Name: Value"`. Repeatable — pass it once per header |
 | `-body` | *(empty)* | Request body. Sets `Content-Type: application/json` unless you set that header yourself |
 
+`-url` and `-expect` are required only when you are not using `-f`; the file carries its own
+equivalents.
+
 ```sh
 loadtester -url https://api.example.internal/users \
   -method POST \
@@ -100,6 +107,40 @@ loadtester -url https://api.example.internal/users \
   -expect 201 \
   -c 50 -n 1000 -timeout 5s
 ```
+
+### Several endpoints from a file
+
+```sh
+loadtester -f requests.json
+```
+
+```json
+{
+  "version": 1,
+  "baseUrl": "https://api.example.internal",
+  "concurrency": 50,
+  "timeout": "5s",
+  "requests": [
+    { "name": "search", "url": "/search?q=foo", "count": 40, "expectStatus": 200 },
+    { "name": "create-user", "method": "POST", "url": "/users",
+      "body": { "name": "test" },
+      "headers": { "Content-Type": "application/json" },
+      "count": 10, "expectStatus": 201 }
+  ]
+}
+```
+
+Every request sharing a `name` is reported as one summary, so the same endpoint can appear more
+than once with different bodies and still be measured as a single thing. `concurrency` is the
+total number of workers, shared across all endpoints rather than given to each, so adding an
+endpoint spreads the same pool wider instead of adding load.
+
+`method` defaults to `GET` and `count` to `1`. `name`, `url` and `expectStatus` are required on
+every entry — `name` because it is the label your results are grouped and reported under, and a
+generated one would leave you matching summaries back to entries by hand.
+
+Passing any single-target flag alongside `-f` exits `2`. The file already carries those settings,
+and two sources for one rule is exactly what the format avoids.
 
 ### Expected status
 
@@ -239,7 +280,7 @@ width of the bucket it lands in.
 |---|---|
 | `0` | The run completed and a summary was printed (`-h` also exits `0`) |
 | `1` | The run failed for a reason other than configuration |
-| `2` | Invalid usage — a bad flag, a missing `-url` or `-expect`, or an invalid configuration |
+| `2` | Invalid usage — a bad flag, a missing `-url` or `-expect`, a config file that will not load, or an invalid configuration |
 | `130` | Interrupted with `Ctrl+C`; a partial summary was printed |
 
 A run whose requests all *failed* still exits `0` — the load test itself succeeded, and the

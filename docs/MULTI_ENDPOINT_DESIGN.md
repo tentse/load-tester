@@ -315,7 +315,7 @@ Produces **7 summaries from 811 requests**: `search` 50 (two variants merged), `
 
 | Field | Type | Meaning |
 |---|---|---|
-| `name` | string, optional | Grouping key. Defaults to `method + " " + path`. |
+| `name` | string, **required** | Grouping key. Entries sharing a name are reported as one summary. |
 | `url` | string, required | Absolute, or relative to `baseUrl`. |
 | `method` | string, optional | Defaults to `GET`. |
 | `body` | object/array/string, optional | Sent verbatim. Excludes `bodyFile`. |

@@ -168,8 +168,6 @@ func TestRenderSummariesNameOrder(t *testing.T) {
 
 	want := []string{"alpha", "charlie", "echo", "mike", "zulu"}
 
-	// Map iteration order is randomised per range, so repeat to make an unsorted
-	// implementation fail reliably rather than once in a while.
 	for range 20 {
 		var output bytes.Buffer
 		if err := renderSummaries(&output, summaries); err != nil {
