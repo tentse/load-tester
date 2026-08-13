@@ -23,6 +23,32 @@ design and reviewing the code rather than writing it.
 > permission to test. Load testing someone else's server without permission is rude at best
 > and illegal at worst — keep it to localhost and your own staging environments.
 
+## Contents
+
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Flags](#flags)
+  - [Several endpoints from a file](#several-endpoints-from-a-file)
+  - [Expected status](#expected-status)
+  - [Headers](#headers)
+  - [Write endpoints: POST, PUT, PATCH, DELETE](#write-endpoints-post-put-patch-delete)
+- [Seeding](#seeding)
+  - [Rules for a seed script](#rules-for-a-seed-script)
+  - [A worked example](#a-worked-example)
+  - [Spreading load across seeded rows](#spreading-load-across-seeded-rows)
+  - [Seeding for DELETE](#seeding-for-delete)
+- [Understanding the output](#understanding-the-output)
+  - [How latencies are aggregated](#how-latencies-are-aggregated)
+- [Exit codes](#exit-codes)
+- [Use as a library](#use-as-a-library)
+- [Known limitations](#known-limitations)
+- [Development](#development)
+  - [Build](#build)
+  - [Tests](#tests)
+  - [Coverage](#coverage)
+  - [Before opening a PR](#before-opening-a-pr)
+- [License](#license)
+
 ## Install
 
 ```sh
@@ -312,21 +338,112 @@ Nothing is broken. The target enforced its unique constraint correctly and the t
 correctly — you just measured the *rejection* path 499 times, which is almost never the question
 you were asking.
 
-#### Seeding
+`PUT`, `PATCH` and `DELETE` all need rows that already exist. Creating them is a separate step —
+see [Seeding](#seeding).
 
-`PUT`, `PATCH` and `DELETE` need rows that already exist, and this tool will not create them. It
-stays a stateless load generator rather than growing response parsing and request chaining, so
-seeding is a separate step you run first:
+## Seeding
 
-- Create the fixtures with **known, fixed IDs**, so your config can name those IDs directly and
-  nothing has to be captured from a response.
-- Make the seed script **idempotent**, so re-running it does not pile up duplicates.
-- Give it a **teardown**, and run it small before you run it big.
-- Only ever point it at a database you own.
+`PUT`, `PATCH` and `DELETE` only mean anything against rows that already exist, and `GET /users/1`
+is not worth measuring if user 1 was never created. This tool does not create them for you.
 
-`DELETE` is the awkward one: every request in a run goes to the same URL, so a single run cannot
-delete 500 different rows. Either seed one row and give that entry `count: 1` alongside your other
-traffic, or aim at a missing ID with `-expect 404` and measure the not-found path on purpose.
+That is a deliberate line rather than a missing feature. To seed its own data the tool would have
+to read response bodies, pull an ID out of one, and substitute it into the next request — response
+parsing, templating and request chaining, all so it could avoid asking you to run one script
+first. It stays a stateless load generator instead, and seeding stays yours.
+
+### Rules for a seed script
+
+- **Fixed, known IDs.** The tool cannot capture an ID out of a create response, so the seed script
+  decides the IDs and the config names them. `PUT /users/1` works because you already know there
+  is a user 1.
+- **Idempotent.** Re-running the seed must not pile up duplicates — upsert, or delete first.
+- **A teardown written at the same time.** Load tests leave rows behind. Write the cleanup when you
+  write the seed, not when you discover you need it.
+- **Small first.** Run it for one row and look at the result before you create ten thousand.
+- **Only a database you own.** The same rule as the load test itself.
+- **Realistic shape.** A seeded user with an empty profile answers faster than a real one with
+  years of history behind it. If your fixtures are thinner than production, your latency numbers
+  are optimistic and you find out at the worst possible time.
+
+### A worked example
+
+Seed three rows with IDs you picked:
+
+```sh
+#!/bin/sh
+# seed.sh
+set -eu
+BASE=http://localhost:8080
+
+for id in 1 2 3; do
+  curl -sS -X PUT "$BASE/users/$id" \
+    -H 'Content-Type: application/json' \
+    -d "{\"id\":$id,\"name\":\"loadtest-user-$id\"}" -o /dev/null
+done
+```
+
+Point the config at exactly those IDs:
+
+```json
+{
+  "version": 1,
+  "baseUrl": "http://localhost:8080",
+  "concurrency": 10,
+  "timeout": "5s",
+  "requests": [
+    { "name": "get-user", "url": "/users/1", "count": 100, "expectStatus": 200 },
+    { "name": "get-user", "url": "/users/2", "count": 100, "expectStatus": 200 },
+    { "name": "get-user", "url": "/users/3", "count": 100, "expectStatus": 200 }
+  ]
+}
+```
+
+Then run the three steps in order. Use `;` before the teardown, not `&&`, so cleanup still happens
+when the load test fails:
+
+```sh
+./seed.sh && loadtester -f requests.json; ./teardown.sh
+```
+
+### Spreading load across seeded rows
+
+Each entry sends to one URL, so one entry can only ever exercise one row. Entries sharing a `name`
+are merged into a single summary, which is exactly what you want here — three entries, three
+seeded IDs, one set of numbers:
+
+```
+Name: get-user
+Total: 300
+Succeeded: 300
+Failed: 0
+```
+
+The server sees 100 requests each on `/users/1`, `/users/2` and `/users/3`, and you read one
+`get-user` summary instead of three you have to add up by hand.
+
+### Seeding for DELETE
+
+Deleting is the case that needs seeding most, because a row can only be deleted once: the first
+request succeeds and every repeat is a `404`. Seed the rows, then give each one its own entry with
+`count: 1`, all under the same name:
+
+```json
+{ "name": "delete-user", "method": "DELETE", "url": "/users/1", "count": 1, "expectStatus": 204 },
+{ "name": "delete-user", "method": "DELETE", "url": "/users/2", "count": 1, "expectStatus": 204 },
+{ "name": "delete-user", "method": "DELETE", "url": "/users/3", "count": 1, "expectStatus": 204 }
+```
+
+```
+Name: delete-user
+Total: 3
+Succeeded: 3
+Failed: 0
+```
+
+One entry per row you seeded, so the load you can put on a delete path is capped by how many rows
+you were willing to create — this is the one path the tool cannot hammer. If all you want is how
+fast the *rejection* path is, that needs no seeding at all: aim at an ID that does not exist and
+set `expectStatus` to `404`.
 
 ## Understanding the output
 
