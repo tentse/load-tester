@@ -279,6 +279,55 @@ before a single request is sent, and the run exits `2`.
 Keep credentials out of your shell history: prefer a variable you clear afterwards, since
 anything on the command line is visible to `ps` while the run is in progress.
 
+### Write endpoints: POST, PUT, PATCH, DELETE
+
+The tool sends the **identical request** every time. It never reads a response body, captures an
+ID, or varies a value between requests, so request 500 is byte-for-byte request 1. That decides
+both what you set `count` (or `-n`) to and what you have to create beforehand.
+
+One question settles it: **if this same request arrives 500 times, does the 500th do the same
+work as the first?**
+
+| Endpoint | Same work every time? | Count to use |
+|---|---|---|
+| `GET` anything | Yes | Whatever you like |
+| `POST` that appends — a comment, an event, an order | Yes, a new row each time | Whatever you like; this is the write path worth loading hardest |
+| `POST` that creates something unique — a user with a taken email | **No.** The first succeeds, the rest hit the constraint | `1`, or use an endpoint that generates its own ID server-side |
+| `PUT` | Yes — idempotent by definition, same body means same final state | Whatever you like, but the row has to exist first |
+| `PATCH` | Usually, unless it is relative like `{"increment": 1}` | Whatever you like if absolute; `1` if relative |
+| `DELETE` | **No.** The first removes the row, the rest are `404` | `1` per row — see below |
+
+The failure this prevents is a confusing one. Point `-expect 201` at a create-user endpoint with
+`-n 500` and you get:
+
+```
+Total: 500
+Succeeded: 1
+Failed: 499
+Errors:
+  conflict: 499
+```
+
+Nothing is broken. The target enforced its unique constraint correctly and the tool reported it
+correctly — you just measured the *rejection* path 499 times, which is almost never the question
+you were asking.
+
+#### Seeding
+
+`PUT`, `PATCH` and `DELETE` need rows that already exist, and this tool will not create them. It
+stays a stateless load generator rather than growing response parsing and request chaining, so
+seeding is a separate step you run first:
+
+- Create the fixtures with **known, fixed IDs**, so your config can name those IDs directly and
+  nothing has to be captured from a response.
+- Make the seed script **idempotent**, so re-running it does not pile up duplicates.
+- Give it a **teardown**, and run it small before you run it big.
+- Only ever point it at a database you own.
+
+`DELETE` is the awkward one: every request in a run goes to the same URL, so a single run cannot
+delete 500 different rows. Either seed one row and give that entry `count: 1` alongside your other
+traffic, or aim at a missing ID with `-expect 404` and measure the not-found path on purpose.
+
 ## Understanding the output
 
 The engine is **closed-loop**: `-n` requests are sent in total, spread across `-c` workers,
@@ -376,116 +425,25 @@ result is in the summary. Check `Failed` rather than the exit code to judge targ
 
 ## Use as a library
 
-```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-	"net/http"
-	"time"
-
-	"github.com/tentse/load-tester/loadtest"
-)
-
-func main() {
-	summary, err := loadtest.Run(context.Background(), loadtest.Config{
-		URL:         "http://localhost:8080/",
-		Method:      "GET",
-		Concurrency: 10,
-		Requests:    100,
-		Timeout:     time.Second,
-		Expect:      http.StatusOK,
-		Headers: http.Header{
-			"X-API-Key": {"secret"},
-		},
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Printf("%d/%d succeeded, p99 %v\n", summary.Succeeded, summary.Total, summary.P99)
-
-	for _, bucket := range summary.Buckets {
-		if bucket.Count > 0 {
-			fmt.Printf("%-10s %d\n", bucket.Label(), bucket.Count)
-		}
-	}
-}
-```
-
-`Expect` is required here exactly as `-expect` is on the command line — a `Config` that leaves
-it at zero fails validation rather than defaulting to anything.
-
-`Summary.Buckets` gives you the same latency breakdown the command prints, but as data instead
-of text. There is one [`Bucket`](https://pkg.go.dev/github.com/tentse/load-tester/loadtest#Bucket)
-per step of the ladder, from fastest to slowest. `Lo` and `Hi` are the start and end of the
-range, and `Count` is how many successful requests landed in it. `Lo` is part of the range and
-`Hi` is not, and the last bucket has no upper limit, so it reports an `Hi` of zero.
-`Bucket.Label` gives you the name the command prints, so the 500ms to 1s bucket reads
-`500ms–1s`. The counts add up to `Succeeded`, not `Total`. Drawing the bars is left to the
-command.
-
-`Run` honors context cancellation: cancel the context and it stops scheduling work, waits for
-in-flight requests, and returns the partial `Summary` along with `ctx.Err()`. A `Config` that
-fails validation returns a zero `Summary` and an error wrapping `loadtest.ErrInvalidConfig`,
-before any request is sent.
-
-### Several endpoints
-
-`FileRun` takes a `FileConfig` and returns a `map[string]Summary`, keyed by each spec's `Name`.
-You do not need the JSON file to use it — the file format is just one way to build a `FileConfig`:
+The `loadtest` package is importable, so you can drive runs from Go instead of shelling out:
 
 ```go
-summaries, err := loadtest.FileRun(context.Background(), loadtest.FileConfig{
-	Version:     1,
-	BaseURL:     "http://localhost:8080",
+summary, err := loadtest.Run(context.Background(), loadtest.Config{
+	URL:         "http://localhost:8080/",
+	Method:      http.MethodGet,
 	Concurrency: 10,
-	Timeout:     5 * time.Second,
-	Requests: []loadtest.RequestSpec{
-		{
-			Name:   "search",
-			URL:    "/search?q=foo",
-			Method: http.MethodGet,
-			Count:  40,
-			Expect: http.StatusOK,
-		},
-		{
-			Name:   "create-user",
-			URL:    "/users",
-			Method: http.MethodPost,
-			Body:   `{"name":"test"}`,
-			Count:  10,
-			Expect: http.StatusCreated,
-		},
-	},
+	Requests:    100,
+	Timeout:     time.Second,
+	Expect:      http.StatusOK,
 })
-if err != nil {
-	log.Fatal(err)
-}
-
-for _, name := range slices.Sorted(maps.Keys(summaries)) {
-	s := summaries[name]
-	fmt.Printf("%-12s %d/%d succeeded, p99 %v\n", name, s.Succeeded, s.Total, s.P99)
-}
 ```
 
-```
-create-user  10/10 succeeded, p99 1ms
-search       40/40 succeeded, p99 5ms
-```
+`FileRun` is the multi-endpoint equivalent: give it a `FileConfig` and it returns one `Summary`
+per `RequestSpec.Name`. `configfile.Load` builds that `FileConfig` from a JSON file, if you want
+the same format the command reads.
 
-Map iteration order is random in Go, so sort the keys if you want stable output — the command
-does the same thing. Each `Summary` has the same shape as the single-target one, with the caveats
-in [Several endpoints from a file](#several-endpoints-from-a-file) about `Elapsed` and
-`Throughput` belonging to the run rather than the endpoint.
-
-To load a `FileConfig` from a JSON file yourself, `configfile.Load` takes an `fs.FS` and a
-filename and returns a validated `FileConfig`, with every error wrapping
-`loadtest.ErrInvalidConfig`.
-
-Full API documentation:
+Every field, the `Summary` and `Bucket` shapes, and the cancellation behaviour are documented on
+the package page:
 [pkg.go.dev/github.com/tentse/load-tester/loadtest](https://pkg.go.dev/github.com/tentse/load-tester/loadtest)
 
 ## Known limitations
