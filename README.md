@@ -6,11 +6,12 @@
 
 A small HTTP load tester written in Go. Point it at a URL, tell it how many requests to send
 and how many to run at once, and it tells you how the target held up — throughput, latency
-percentiles, the full latency distribution, and a breakdown of whatever went wrong.
+percentiles, the full latency distribution, and a breakdown of whatever went wrong. Point it at
+a JSON file instead and it runs several endpoints in one pass, reporting each one separately.
 
-It's a library as well as a command. The public API (`Config`, `Run`, `Summary`, `Bucket`)
-lives in an importable `loadtest` package, so you can drive load tests from your own Go code
-instead of shelling out to a binary.
+It's a library as well as a command. The public API (`Config`, `Run`, `FileConfig`,
+`RequestSpec`, `FileRun`, `Summary`, `Bucket`) lives in an importable `loadtest` package, so you
+can drive load tests from your own Go code instead of shelling out to a binary.
 
 The production code uses **nothing but the Go standard library**. That's a deliberate
 constraint, not an accident — the whole point was to learn Go's concurrency model properly
@@ -52,21 +53,21 @@ Load test summary
 Total: 500
 Succeeded: 500
 Failed: 0
-Elapsed: 249.2195ms
-Throughput: 2006.26 req/s
+Elapsed: 115.927083ms
+Throughput: 4313.06 req/s
 P50: <= 5ms
 P90: <= 10ms
-P99: <= 200ms
+P99: <= 20ms
   bucket       count
   <1ms             0
-  1–2ms           40   █████▏
-  2–5ms          260   ██████████████████████████████████
-  5–10ms         155   ████████████████████▎
-  10–20ms         30   ███▉
-  20–50ms          6   ▊
-  50–100ms         3   ▍
-  100–200ms        5   ▋
-  200–500ms        1   ▏
+  1–2ms            0
+  2–5ms          404   ██████████████████████████████████
+  5–10ms          76   ██████▍
+  10–20ms         20   █▋
+  20–50ms          0
+  50–100ms         0
+  100–200ms        0
+  200–500ms        0
   500ms–1s         0
   1–2s             0
   2–5s             0
@@ -75,6 +76,15 @@ P99: <= 200ms
 Errors:
 n/a
 ```
+
+To exercise several endpoints in one run, describe them in a JSON file instead:
+
+```sh
+loadtester -f requests.json
+```
+
+Each endpoint gets its own summary, and they share one worker pool. See
+[Several endpoints from a file](#several-endpoints-from-a-file).
 
 Press `Ctrl+C` at any point and the run stops cleanly: in-flight requests are canceled and
 you still get a summary of everything that completed.
@@ -97,7 +107,8 @@ to test a single URL.
 | `-body` | *(empty)* | Request body. Sets `Content-Type: application/json` unless you set that header yourself |
 
 `-url` and `-expect` are required only when you are not using `-f`; the file carries its own
-equivalents.
+equivalents. Every flag accepts either spelling of its value, so `-f requests.json` and
+`-f=requests.json` do the same thing.
 
 ```sh
 loadtester -url https://api.example.internal/users \
@@ -130,6 +141,40 @@ loadtester -f requests.json
 }
 ```
 
+You get one summary per `name`:
+
+```
+Name: create-user
+Total: 10
+Succeeded: 10
+Failed: 0
+Elapsed: 11.180792ms
+Throughput: 894.39 req/s
+P50: <= 1ms
+P90: <= 1ms
+P99: <= 1ms
+  bucket       count
+  <1ms            10   ██████████████████████████████████
+  ...
+Errors:
+n/a
+
+Name: search
+Total: 40
+Succeeded: 40
+Failed: 0
+Elapsed: 11.180792ms
+Throughput: 3577.56 req/s
+P50: <= 5ms
+P90: <= 5ms
+P99: <= 5ms
+  bucket       count
+  2–5ms           40   ██████████████████████████████████
+  ...
+Errors:
+n/a
+```
+
 Every request sharing a `name` is reported as one summary, so the same endpoint can appear more
 than once with different bodies and still be measured as a single thing. `concurrency` is the
 total number of workers, shared across all endpoints rather than given to each, so adding an
@@ -139,8 +184,33 @@ endpoint spreads the same pool wider instead of adding load.
 every entry — `name` because it is the label your results are grouped and reported under, and a
 generated one would leave you matching summaries back to entries by hand.
 
+`baseUrl` and each `url` are joined with exactly one slash between them, so neither side has to
+be careful about its own slashes. All four of these produce `https://api.example.internal/users`:
+
+| `baseUrl` | `url` |
+|---|---|
+| `https://api.example.internal` | `/users` |
+| `https://api.example.internal` | `users` |
+| `https://api.example.internal/` | `/users` |
+| `https://api.example.internal/` | `users` |
+
+Leave `baseUrl` out entirely and each `url` has to be a complete URL of its own.
+
 Passing any single-target flag alongside `-f` exits `2`. The file already carries those settings,
 and two sources for one rule is exactly what the format avoids.
+
+The format's design and its trade-offs are written up in
+[docs/MULTI_ENDPOINT_DESIGN.md](docs/MULTI_ENDPOINT_DESIGN.md), kept as a record of the reasoning
+rather than as current documentation.
+
+> **Two things about this output are known and being changed.** `Elapsed` and `Throughput` are
+> repeated identically under every name because they describe the whole run, not that endpoint —
+> a name's `Throughput` is only its share of the overall rate, so it is `Total` rescaled by a
+> constant and tells you nothing `Total` does not. And endpoints are issued **in order**, each
+> one's `count` in full before the next begins, rather than mixed together — so an endpoint's
+> percentiles are measured while it has the pool to itself, not while it competes with its
+> neighbours. Until that changes, read the per-endpoint numbers as "this endpoint, run alone" and
+> ignore the repeated rate. See [Known limitations](#known-limitations).
 
 ### Expected status
 
@@ -344,6 +414,59 @@ in-flight requests, and returns the partial `Summary` along with `ctx.Err()`. A 
 fails validation returns a zero `Summary` and an error wrapping `loadtest.ErrInvalidConfig`,
 before any request is sent.
 
+### Several endpoints
+
+`FileRun` takes a `FileConfig` and returns a `map[string]Summary`, keyed by each spec's `Name`.
+You do not need the JSON file to use it — the file format is just one way to build a `FileConfig`:
+
+```go
+summaries, err := loadtest.FileRun(context.Background(), loadtest.FileConfig{
+	Version:     1,
+	BaseURL:     "http://localhost:8080",
+	Concurrency: 10,
+	Timeout:     5 * time.Second,
+	Requests: []loadtest.RequestSpec{
+		{
+			Name:   "search",
+			URL:    "/search?q=foo",
+			Method: http.MethodGet,
+			Count:  40,
+			Expect: http.StatusOK,
+		},
+		{
+			Name:   "create-user",
+			URL:    "/users",
+			Method: http.MethodPost,
+			Body:   `{"name":"test"}`,
+			Count:  10,
+			Expect: http.StatusCreated,
+		},
+	},
+})
+if err != nil {
+	log.Fatal(err)
+}
+
+for _, name := range slices.Sorted(maps.Keys(summaries)) {
+	s := summaries[name]
+	fmt.Printf("%-12s %d/%d succeeded, p99 %v\n", name, s.Succeeded, s.Total, s.P99)
+}
+```
+
+```
+create-user  10/10 succeeded, p99 1ms
+search       40/40 succeeded, p99 5ms
+```
+
+Map iteration order is random in Go, so sort the keys if you want stable output — the command
+does the same thing. Each `Summary` has the same shape as the single-target one, with the caveats
+in [Several endpoints from a file](#several-endpoints-from-a-file) about `Elapsed` and
+`Throughput` belonging to the run rather than the endpoint.
+
+To load a `FileConfig` from a JSON file yourself, `configfile.Load` takes an `fs.FS` and a
+filename and returns a validated `FileConfig`, with every error wrapping
+`loadtest.ErrInvalidConfig`.
+
 Full API documentation:
 [pkg.go.dev/github.com/tentse/load-tester/loadtest](https://pkg.go.dev/github.com/tentse/load-tester/loadtest)
 
@@ -351,40 +474,41 @@ Full API documentation:
 
 Honest about what the tool does not do yet. Each of these is planned work, not a mystery.
 
-- **Configuration errors are reported as target failures.** A malformed URL (`-url nope`) or
-  an unusable method is caught by Go's HTTP client, not by validation — so no request ever
-  leaves your machine, yet the summary blames the target with `request failed` and the tool
-  still exits `0`. Check the summary, not just `$?`, and suspect your own flags first when
-  every request fails identically.
-- **Percentiles are bucketed, not exact.** Latencies are counted into a fixed ladder of
-  buckets — `<1ms`, `1–2ms`, `2–5ms`, `5–10ms`, and so on up to `≥10s` — so a reported
-  percentile is the upper bound of its bucket and can overstate the true latency by up to
-  about 2.5×. Precision is also capped by `-n`: percentiles resolve only in steps of `1/n`,
-  so a p99 from a 100-request run rests on a single observation. The printed ladder at least
-  shows you how rough the number is: you can see how many requests sit in the bucket a
-  percentile landed in, and how wide that bucket is.
+- **`Elapsed` and `Throughput` in a file run describe the run, not the endpoint.** Every name
+  reports the same `Elapsed`, so a name's `Throughput` is only its `Total` rescaled — compare
+  endpoints by their percentiles and bucket ladders instead.
+- **A repeated flag silently takes the last value.** `-n 10 -n 5000` sends 5,000 requests, and
+  `-f missing.json -f ok.json` runs `ok.json` and exits `0` without ever opening the first file.
+- **Endpoints in a file run in sequence, not mixed.** Each entry's `count` is sent in full before
+  the next begins, so endpoints never contend with each other and their percentiles are measured
+  with the worker pool to themselves.
+- **Configuration errors are reported as target failures.** A malformed URL like `-url nope` is
+  caught by Go's HTTP client rather than by validation, so the summary blames the target with
+  `request failed` and the run still exits `0`.
+- **A repeated JSON key is accepted and the last one wins.** `"count": 2, "count": 9999` parses
+  cleanly and sends 9,999 requests — unknown fields are rejected, but duplicated known ones are
+  not.
+- **Anything after the closing brace of the config is ignored.** A truncated or double-pasted
+  file can load as though it were perfectly fine.
+- **The target can receive more requests than you asked for.** Go's HTTP client retries
+  idempotent requests that die on a reused connection, and every redirect adds a hop — `-n 500`
+  against a URL that redirects once puts 1,000 requests on the server.
+- **A wrong-status failure is named after the status that arrived.** Under `-expect 500` a
+  healthy server prints `Errors: ok: 40` beneath `Failed: 40`; the count is right, the wording
+  is not.
+- **Percentiles are bucketed, not exact.** A percentile is reported as the upper bound of its
+  bucket, so it can overstate the true latency by up to about 2.5×, and precision is capped by
+  `-n`. The printed ladder shows you how rough the number is.
+- **`-expect` takes one exact code, not a range or a list.** There is no way to accept "any 2xx",
+  and the value is only checked for being positive, so `-expect 99999` is accepted and fails
+  every request.
+- **No redirect control.** Redirects are followed automatically, so you only see the status at
+  the end of the chain and `-expect 301` can never match a URL that actually redirects.
 - **Secrets on the command line are visible** in your shell history and to anyone who can run
-  `ps` while the test is running. This covers a credential passed via `-H`, and equally a key
-  embedded in `-url`. Prefer a shell variable that you clear afterwards.
-- **Workers are not capped at `-n`.** Passing `-c 500000 -n 5` creates far more goroutines
-  than there is work for. Harmless, but wasteful.
-- **Single target only.** One URL, one method, one body per run.
-- **`-expect` takes one exact code, not a range or a list.** There is no way to accept "any
-  2xx" or "200 or 204" in a single run, so an endpoint that legitimately answers with more than
-  one status has to be tested one code at a time. The value is also only checked for being
-  positive — `-expect 99999` is accepted and simply fails every request.
-- **No redirect control.** Redirects are followed automatically, so a `301` never shows up in
-  your results — you get the status at the end of the chain, and the latency covers every hop.
-  This means `-expect 301` can never match against a URL that actually redirects. It also means
-  `-n` undercounts the load your server receives: against a URL that redirects once, `-n 500`
-  puts **1000** requests on the target.
+  `ps` during the run, whether passed via `-H` or embedded in `-url`.
+- **Workers are not capped at `-n`.** Passing `-c 500000 -n 5` creates far more goroutines than
+  there is work for. Wasteful, not harmful.
 - **No fixed-duration runs.** You say how many requests to send, not how long to run for.
-
-## Roadmap
-
-The next major feature is multi-endpoint runs driven by a JSON file — several requests in one
-run, grouped into separate summaries, sharing one bounded worker pool. The design and its
-trade-offs are written up in [docs/MULTI_ENDPOINT_DESIGN.md](docs/MULTI_ENDPOINT_DESIGN.md).
 
 ## Development
 
@@ -438,23 +562,6 @@ lines red, which is how you catch a branch you only *thought* you'd tested.
 
 Current state: **`loadtest` is at 100%**, `cmd/loadtester` at 91.5%, **96.5% overall**. All the
 real logic lives in `loadtest`, and it's meant to stay at 100%.
-
-### Formatting and static analysis
-
-| Command | What it does |
-|---|---|
-| `gofmt -l .` | Lists files that aren't correctly formatted — silence means everything is fine. |
-| `gofmt -w .` | Rewrites those files in place, fixing the formatting for you. |
-| `go vet ./...` | Reports suspicious code that still compiles: bad `Printf` verbs, unused results, copied locks. |
-| `golangci-lint run` | Runs a bundle of third-party linters in one pass; the only tool here that isn't part of Go. |
-
-`gofmt` and `go vet` both ship with Go, and both are currently clean.
-
-`golangci-lint` is optional and installed separately (`brew install golangci-lint`, or see the
-[install docs](https://golangci-lint.run/welcome/install/)). It currently reports **4 `errcheck`
-findings**, all of them unchecked `fmt.Fprintf` writes to the CLI's own output stream in
-`cmd/loadtester/main.go`. They're known and on the list to fix — don't let them block your PR,
-but do keep your own changes clean.
 
 ### Before opening a PR
 

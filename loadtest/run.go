@@ -247,14 +247,15 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 //
 // Name must be non-empty and is the grouping key. Every spec sharing a Name is reported under a
 // single Summary, so one endpoint can appear more than once with different bodies or headers and
-// still be measured as one thing. Method must be non-empty. URL is appended to
-// FileConfig.BaseURL, so a spec can carry only a path when a base is set.
+// still be measured as one thing. Method must be non-empty. URL is joined to FileConfig.BaseURL
+// with exactly one slash between them, so a spec can carry only a path when a base is set, and
+// neither side has to be careful about its own leading or trailing slash.
 //
-// Count must be greater than zero and is how many times to fire this spec. It exists to weight
-// the traffic mix, so a common variant can be sent more often than a rare one. Expect must be
-// greater than zero and is the HTTP status code that counts as a success for this spec, matched
-// exactly, in the same way Config.Expect is for a single target run. Header and Body are optional
-// and are sent as given.
+// Count must be greater than zero and is how many times to fire this spec. Every spec is issued
+// in full before the next one starts, so today Count sets how long that endpoint runs for rather
+// than how densely it appears in a mixed stream. Expect must be greater than zero and is the HTTP
+// status code that counts as a success for this spec, matched exactly, in the same way
+// Config.Expect is for a single target run. Header and Body are optional and are sent as given.
 type RequestSpec struct {
 	Name   string
 	URL    string
@@ -372,6 +373,11 @@ func combineURL(baseURL, url string) string {
 // per-name figures sum to the run total. Judge an individual endpoint by its percentiles and
 // Buckets instead.
 //
+// Each spec's URL is joined to cfg.BaseURL with exactly one slash between them, however the two
+// were written. Specs are issued in the order they appear in cfg.Requests,
+// each one's Count in full before the next begins, so a run walks the endpoints in sequence
+// rather than interleaving them.
+//
 // FileRun returns an empty map and an error when cfg fails validation. Individual HTTP request
 // failures are recorded in the Summary they belong to rather than returned as the FileRun error,
 // as in Run. If ctx is canceled, FileRun stops scheduling work, waits for in-flight workers to
@@ -422,7 +428,6 @@ func FileRun(ctx context.Context, cfg FileConfig) (map[string]Summary, error) {
 
 	wg.Wait()
 
-	// measured once, so every name reports the same run duration
 	elapsed := time.Since(elapsedStart)
 
 	summaries := make(map[string]Summary)

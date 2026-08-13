@@ -1,17 +1,19 @@
-// Package loadtest generates HTTP load against a single target and reports
-// throughput, latency percentiles, and a breakdown of failures.
+// Package loadtest generates HTTP load and reports throughput, latency percentiles,
+// and a breakdown of failures.
 //
-// A loadtest is described by a [Config] and executed by [Run], which returns a
-// [Summary]. The engine is closed loop: Config.Requests requests are sent in
-// total, spread across Config.Concurrency workers, and every worker waits for
-// its response before taking the next request. There is no target request rate,
-// and no way to run for a fixed duration: a run ends once Config.Requests
-// requests have been sent, or when ctx is canceled.
+// There are two ways in. A [Config] executed by [Run] drives a single URL and returns
+// one [Summary]. A [FileConfig] executed by [FileRun] drives several endpoints in one
+// pass and returns one Summary per endpoint name. Both use the same engine, the same
+// worker pool, and the same reporting.
 //
-// Authentication is expressed through Config.Headers rather than a dedicated
-// field, so any scheme works: a bearer token, an API key under whatever name the
-// target expects, or several at once. Query parameters must be included in the
-// URL itself.
+// The engine is closed loop: a fixed number of requests is sent in total, spread
+// across Concurrency workers, and every worker waits for its response before taking
+// the next request. There is no target request rate, and no way to run for a fixed
+// duration: a run ends once every request has been sent, or when ctx is canceled.
+//
+// Authentication is expressed through headers rather than a dedicated field, so any
+// scheme works: a bearer token, an API key under whatever name the target expects, or
+// several at once. Query parameters must be included in the URL itself.
 //
 // Config has no defaults. Every field it validates must be set explicitly:
 //
@@ -36,11 +38,15 @@
 // Timeout applies to each request on its own, not to the run as a whole. It
 // covers the complete round trip, including reading the response body.
 //
-// The shared HTTP client sets MaxIdleConns and MaxIdleConnsPerHost to 100. These
-// are not configurable.
+// The shared HTTP client keeps an idle connection pool the same size as Concurrency,
+// so a worker holds on to its connection between requests instead of opening a fresh
+// one each time. A smaller pool would leave every worker past the limit closing and
+// reopening a connection per request, which spends a local port each time until the
+// machine runs out of them and the run begins failing for reasons that have nothing
+// to do with the target.
 //
 // A request succeeds when it completes without a transport error and its HTTP
-// status is exactly Config.Expect. Every other status is a failure, as is any
+// status is exactly the expected status. Every other status is a failure, as is any
 // request that never completes. Summary.Throughput counts successful requests per
 // second, and Summary.P50, P90, and P99 are latency percentiles over successful
 // requests only. Latencies are counted into a fixed bucket ladder rather than
@@ -59,11 +65,42 @@
 // together with ctx.Err(). A Config that fails validation produces a zero
 // Summary and an error wrapping [ErrInvalidConfig], before any request is sent.
 //
+// # Several endpoints in one run
+//
+// [FileRun] takes a [FileConfig], which carries the settings that apply to the whole
+// run — Version, Concurrency, Timeout, and an optional BaseURL — together with a list
+// of [RequestSpec] values describing the endpoints. FileRun follows the same rules as
+// Run for validation, failed requests, and cancellation, and returns the summaries
+// gathered so far when ctx is canceled.
+//
+// Concurrency is the total number of workers, shared by every endpoint rather than
+// given to each, so adding an endpoint spreads the same pool wider instead of adding
+// load. Timeout still applies to each request on its own.
+//
+// Results are grouped by RequestSpec.Name, one Summary per name. Specs sharing a Name
+// are merged on purpose, so one endpoint can appear more than once with different
+// bodies or headers and still be measured as a single thing.
+//
+// RequestSpec.URL is joined to FileConfig.BaseURL with exactly one slash between them,
+// so the base and the path may each carry a trailing or leading slash, or neither,
+// without producing a double slash or a run-together URL. An empty BaseURL leaves the
+// spec's URL untouched, which is how a spec carries a whole URL of its own.
+//
+// Two things about the report are worth knowing before reading it. Every Summary
+// carries the same Elapsed, the wall-clock duration of the whole run, so a name's
+// Throughput is its share of the overall request rate rather than a rate that endpoint
+// could sustain alone. And the specs are issued in the order they appear in
+// FileConfig.Requests, each one's Count in full before the next begins, so a run walks
+// the endpoints in sequence rather than mixing them together. Judge an individual
+// endpoint by its percentiles and Buckets, which are its own.
+//
+// # Load, memory, and the bucket ladder
+//
 // This package generates real load. Only point it at systems you own or have
 // explicit permission to test.
 //
-// Memory does not scale with Config.Requests. Each successful latency is counted
-// into one of a fixed set of buckets as it arrives and the timing itself is
+// Memory does not scale with the number of requests. Each successful latency is
+// counted into one of a fixed set of buckets as it arrives and the timing itself is
 // discarded, so a run of ten million requests costs the same as a run of ten.
 //
 // The buckets are half-open, so [1ms, 2ms) includes exactly 1ms and excludes

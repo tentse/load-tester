@@ -1,17 +1,36 @@
 # Design notes: multi-endpoint JSON load tests (v0.6)
 
-**Status:** proposal / design record. Nothing here is implemented. This is the agreed shape
-for the milestone *after* `v0.5.0` (printed latency ladder).
+**Status: implemented — historical record, not current documentation.**
 
-> The version number has moved four times: this was written targeting v0.2, which went to
-> counting latencies into buckets, then v0.3, which went to custom request headers, then v0.4,
+This is the design as it was agreed *before* the feature was built. It is kept for the reasoning
+behind the decisions, not as a description of how the tool behaves. **The current contract is the
+[README](../README.md) and the
+[godoc](https://pkg.go.dev/github.com/tentse/load-tester/loadtest).** Where the two disagree, the
+README is right and this file is out of date on purpose.
+
+Where the build diverged from this document:
+
+- **`name` is required on every entry.** This doc describes generating one when it is missing;
+  that was dropped, because a generated label leaves you matching summaries back to entries by
+  hand.
+- **`baseUrl` and `url` are joined with exactly one slash.** This doc assumes plain
+  concatenation, which produced a double slash or a run-together URL depending on how the two
+  were written.
+- **The idle connection pool is sized to `concurrency`**, not left at a fixed 100.
+- **Entries run in sequence, not mixed.** Decision 4 below describes `count` as weighting a
+  traffic mix. That is the intent, but the implementation issues each entry's `count` in full
+  before starting the next, so `count` is currently a batch size. Interleaving is on the README
+  roadmap.
+- **The "Open questions" section at the end was settled during the build** and is left as written.
+
+> The version number moved four times before this was built: written targeting v0.2, which went
+> to counting latencies into buckets, then v0.3, which went to custom request headers, then v0.4,
 > which went to required expected status, then v0.5, which went to printing that bucket ladder.
-> It is now v0.6. The README roadmap deliberately no longer names a version, so it cannot drift
-> again — only this heading has to be corrected.
+> It shipped as v0.6.
 
-**Scope boundary (hard):** v0.6 stays **stateless and fire-and-forget**, exactly like today's
+**Scope boundary (hard):** v0.6 stays **stateless and fire-and-forget**, exactly like the v0.5
 engine. No value templating, no response capture, no request chaining, no ordered phases. Those
-are deliberately *out of scope* — see "Explicitly out of scope" at the bottom.
+were deliberately *out of scope* — see "Explicitly out of scope" at the bottom.
 
 ---
 

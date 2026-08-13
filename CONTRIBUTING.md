@@ -21,7 +21,10 @@ Two rules shape most decisions here:
    case before writing the code. The only current dependency is `go.uber.org/goleak`, and it
    is test-only.
 2. **The public API stays in the importable `loadtest` package.** This tool is meant to be
-   usable as a library, so `Config`, `Run`, and `Summary` do not move into `internal/`.
+   usable as a library, so `Config`, `Run`, `FileConfig`, `RequestSpec`, `FileRun`, `Summary`,
+   and `Bucket` do not move into `internal/`. The JSON file format lives in `configfile`, which
+   exists to turn a file into a `FileConfig` and nothing else — parsing concerns stay out of
+   `loadtest`.
 
 `cmd/loadtester` stays thin: parse flags, call the library, render, choose an exit code. Real
 logic belongs in `loadtest`.
@@ -83,6 +86,12 @@ the public contract:
   are in the summary.
 - Cancellation returns a **partial** `Summary` together with `ctx.Err()`, rather than
   discarding the work already done.
+- In a file run, entries sharing a `name` are **merged into one `Summary`** on purpose. It is how
+  the same endpoint can be exercised with several bodies and still be reported as one thing.
+- In a file run, `concurrency` is the **total** worker count shared across every endpoint, not a
+  per-endpoint figure. Adding an endpoint spreads the same pool wider; it does not add load.
+- `baseUrl` and each `url` are joined with exactly one slash between them, so both a trailing
+  slash on the base and a leading slash on the path are accepted, and so is neither.
 
 ## License
 
