@@ -41,8 +41,35 @@ Requires Go 1.26 or newer.
 
 ## Quick start
 
+There are two ways to run a test. Point it at a single URL:
+
 ```sh
 loadtester -url http://localhost:8080/ -c 20 -n 500 -expect 200
+```
+
+Or describe several endpoints in a JSON file and get a separate summary for each, all sharing one
+worker pool:
+
+```sh
+loadtester -f requests.json
+```
+
+The two cannot be combined — the file carries its own settings, so passing any single-target flag
+alongside `-f` exits `2`. See [Several endpoints from a file](#several-endpoints-from-a-file) for
+the file format.
+
+Only `-url` and `-expect` are required. Here is every single-target flag at once:
+
+```sh
+loadtester -url http://localhost:8080/users \
+  -method POST \
+  -body '{"name":"test"}' \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -H "X-Request-Source: load-test" \
+  -expect 201 \
+  -c 20 \
+  -n 500 \
+  -timeout 5s
 ```
 
 `-expect` is required: you tell the tool which status code counts as a success, and everything
@@ -53,17 +80,17 @@ Load test summary
 Total: 500
 Succeeded: 500
 Failed: 0
-Elapsed: 115.927083ms
-Throughput: 4313.06 req/s
-P50: <= 5ms
+Elapsed: 134.895209ms
+Throughput: 3706.58 req/s
+P50: <= 10ms
 P90: <= 10ms
-P99: <= 20ms
+P99: <= 10ms
   bucket       count
   <1ms             0
   1–2ms            0
-  2–5ms          404   ██████████████████████████████████
-  5–10ms          76   ██████▍
-  10–20ms         20   █▋
+  2–5ms          239   ███████████████████████████████▎
+  5–10ms         259   ██████████████████████████████████
+  10–20ms          2   ▎
   20–50ms          0
   50–100ms         0
   100–200ms        0
@@ -76,15 +103,6 @@ P99: <= 20ms
 Errors:
 n/a
 ```
-
-To exercise several endpoints in one run, describe them in a JSON file instead:
-
-```sh
-loadtester -f requests.json
-```
-
-Each endpoint gets its own summary, and they share one worker pool. See
-[Several endpoints from a file](#several-endpoints-from-a-file).
 
 Press `Ctrl+C` at any point and the run stops cleanly: in-flight requests are canceled and
 you still get a summary of everything that completed.
