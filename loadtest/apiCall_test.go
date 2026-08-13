@@ -3,6 +3,7 @@ package loadtest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -347,5 +348,26 @@ func TestResponseBodyError(t *testing.T) {
 	}
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Errorf("error = %v, want %v", err, io.ErrUnexpectedEOF)
+	}
+}
+
+func TestNewClientPoolSizedToConcurrency(t *testing.T) {
+	tests := []int{1, 10, 500, 5000}
+
+	for _, concurrency := range tests {
+		t.Run(fmt.Sprintf("c=%d", concurrency), func(t *testing.T) {
+			client := newClient(defaultTimeout, concurrency)
+
+			transport, ok := client.Transport.(*http.Transport)
+			if !ok {
+				t.Fatalf("newClient() transport = %T, want *http.Transport", client.Transport)
+			}
+			if transport.MaxIdleConns != concurrency {
+				t.Errorf("MaxIdleConns = %d, want %d", transport.MaxIdleConns, concurrency)
+			}
+			if transport.MaxIdleConnsPerHost != concurrency {
+				t.Errorf("MaxIdleConnsPerHost = %d, want %d", transport.MaxIdleConnsPerHost, concurrency)
+			}
+		})
 	}
 }
