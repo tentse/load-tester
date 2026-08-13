@@ -47,13 +47,13 @@ type Summary struct {
 	Errors     map[string]int
 }
 
-func summarize(lh *latencyHistogram, elapsed time.Duration, total, succeeded, failed int, errors map[string]int) Summary {
+func summarize(lh *latencyHistogram, elapsed time.Duration, st *statusTracker) Summary {
 
 	summary := Summary{
-		Total:     total,
-		Succeeded: succeeded,
-		Failed:    failed,
-		Errors:    errors,
+		Total:     st.Total,
+		Succeeded: st.Succeeded,
+		Failed:    st.Failed,
+		Errors:    st.Errors,
 	}
 
 	summary.P50 = percentile(lh, p50)

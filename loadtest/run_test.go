@@ -3,10 +3,12 @@ package loadtest
 import (
 	"context"
 	"errors"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -158,7 +160,6 @@ func TestInvalidConfig(t *testing.T) {
 	tests := []struct {
 		name            string
 		cfg             Config
-		want            Summary
 		wantErrContains string
 	}{
 		{
@@ -170,11 +171,6 @@ func TestInvalidConfig(t *testing.T) {
 				Timeout:     time.Duration(10) * time.Second,
 				Method:      "",
 				Expect:      200,
-			},
-			want: Summary{
-				Total:     1,
-				Succeeded: 0,
-				Failed:    1,
 			},
 			wantErrContains: "invalid method",
 		},
@@ -396,7 +392,7 @@ func TestRunClosesIdleConnections(t *testing.T) {
 	}
 }
 
-func TestWorkersUpdatingLatencyHistogramValue(t *testing.T) {
+func TestConcurrentlyUpdatingLatencyHistogramValue(t *testing.T) {
 	wantedTotal := 1000
 	lh := latencyHistogram{}
 
@@ -416,7 +412,7 @@ func TestWorkersUpdatingLatencyHistogramValue(t *testing.T) {
 	}
 }
 
-func TestWorkersUpdatingStatusTrackerValue(t *testing.T) {
+func TestConcurrentlyUpdatingStatusTrackerValue(t *testing.T) {
 	wantedSucceededCount := 1000
 	statusTracker := statusTracker{}
 
@@ -738,6 +734,455 @@ func TestErrorsMapCountConsistentWithTotal(t *testing.T) {
 
 			if tc.want != totalErrorsCounted {
 				t.Errorf("got total error count: %d with error map: %v, want total error count: %d", totalErrorsCounted, statusTracker.Errors, tc.want)
+			}
+		})
+	}
+}
+
+func TestFileRun(t *testing.T) {
+	mockOkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockOkServer.Close()
+	mockInternalServerErrorServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer mockInternalServerErrorServer.Close()
+
+	tests := []struct {
+		name       string
+		fileConfig FileConfig
+		want       map[string]Summary
+	}{
+		{
+			name: "first request: 200(5), 500(2). second request: 200(5)",
+			fileConfig: FileConfig{
+				Version:     1,
+				BaseURL:     "",
+				Concurrency: 10,
+				Timeout:     1 * time.Second,
+				Requests: []RequestSpec{
+					{
+						Name:   "first",
+						URL:    mockOkServer.URL,
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  5,
+						Expect: 200,
+					},
+					{
+						Name:   "second",
+						URL:    mockOkServer.URL,
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  2,
+						Expect: 200,
+					},
+					{
+						Name:   "first", // first: getting two request internal server error
+						URL:    mockInternalServerErrorServer.URL,
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  2,
+						Expect: 200,
+					},
+					{
+						Name:   "second", //second: with some addition of query parameter.
+						URL:    mockOkServer.URL,
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  3,
+						Expect: 200,
+					},
+				},
+			},
+			want: map[string]Summary{
+				"first": {
+					Total:     7,
+					Succeeded: 5,
+					Failed:    2,
+					Errors: map[string]int{
+						statusErrText(http.StatusInternalServerError): 2,
+					},
+				},
+				"second": {
+					Total:     5,
+					Succeeded: 5,
+					Failed:    0,
+					Errors:    map[string]int{},
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := FileRun(t.Context(), tc.fileConfig)
+
+			if err != nil {
+				t.Fatalf("expected err nil, got error: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d summaries, want %d (names: %v)", len(got), len(tc.want), slices.Sorted(maps.Keys(got)))
+			}
+
+			for name, want := range tc.want {
+				g, ok := got[name]
+				if !ok {
+					t.Errorf("missing summary for %q", name)
+					continue
+				}
+				assertEqual(t, name+" total", g.Total, want.Total)
+				assertEqual(t, name+" succeeded", g.Succeeded, want.Succeeded)
+				assertEqual(t, name+" failed", g.Failed, want.Failed)
+				if !maps.Equal(g.Errors, want.Errors) {
+					t.Errorf("%s errors: got %v, want %v", name, g.Errors, want.Errors)
+				}
+
+				assertEqual(t, name+" bucket count", len(g.Buckets), len(bucketEdges)+1)
+
+				var bucketed int64
+				for _, bucket := range g.Buckets {
+					bucketed += bucket.Count
+				}
+				assertEqual(t, name+" bucketed latencies", int(bucketed), want.Succeeded)
+			}
+		})
+	}
+
+}
+
+func TestFileRunCancellation(t *testing.T) {
+
+	started := make(chan struct{}, 1)
+
+	okMockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-req.Context().Done()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer okMockServer.Close()
+	cfg := FileConfig{
+		Version:     1,
+		BaseURL:     "",
+		Concurrency: 1,
+		Timeout:     1 * time.Second,
+		Requests: []RequestSpec{
+			{
+				Name:   "first",
+				URL:    okMockServer.URL,
+				Method: http.MethodGet,
+				Header: http.Header{},
+				Count:  1,
+				Body:   "",
+				Expect: 200,
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	type runResult struct {
+		summary map[string]Summary
+		err     error
+	}
+	finished := make(chan runResult, 1)
+	go func() {
+		summary, err := FileRun(ctx, cfg)
+		finished <- runResult{summary: summary, err: err}
+	}()
+
+	select {
+	case <-started:
+		cancel()
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Request not fired even after 500 milliseconds")
+	}
+
+	select {
+	case got := <-finished:
+		if got.err == nil {
+			t.Fatalf("expected context cancellation error, got summary -> %+v, err -> %v", got.summary, got.err)
+		}
+		if !errors.Is(got.err, context.Canceled) {
+			t.Errorf("expected context cancellation message, got %v", got.err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Run did not return promptly after cancellation")
+	}
+}
+
+func TestFileRunClosesIdleConnections(t *testing.T) {
+	idle := make(chan struct{}, 1)
+	closed := make(chan struct{}, 1)
+
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateIdle:
+			select {
+			case idle <- struct{}{}:
+			default:
+			}
+		case http.StateClosed:
+			select {
+			case closed <- struct{}{}:
+			default:
+			}
+		}
+	}
+
+	server.Start()
+	defer server.Close()
+
+	_, err := FileRun(t.Context(), FileConfig{
+		Version:     1,
+		BaseURL:     "",
+		Concurrency: 1,
+		Timeout:     1 * time.Second,
+		Requests: []RequestSpec{
+			{
+				Name:   "first",
+				URL:    server.URL,
+				Method: http.MethodGet,
+				Header: http.Header{},
+				Count:  1,
+				Body:   "",
+				Expect: 200,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("got err = %q, want = nil", err.Error())
+	}
+
+	select {
+	case <-idle:
+	case <-time.After(defaultTimeout):
+		t.Fatal("connection never became idle")
+	}
+	select {
+	case <-closed:
+	case <-time.After(defaultTimeout):
+		t.Fatal("run returned without closing the idle connection")
+	}
+}
+
+func TestInvalidFileConfig(t *testing.T) {
+	okMockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer okMockServer.Close()
+	tests := []struct {
+		name            string
+		cfg             FileConfig
+		wantErrContains string
+	}{
+		{
+			name: "empty version",
+			cfg: FileConfig{
+				BaseURL:     okMockServer.URL,
+				Concurrency: 0,
+				Timeout:     1 * time.Second,
+				Requests: []RequestSpec{
+					{
+						Name:   "first",
+						URL:    "",
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  1,
+						Expect: 200,
+					},
+				},
+			},
+			wantErrContains: "version not supported",
+		},
+		{
+			name: "concurrency equals 0",
+			cfg: FileConfig{
+				Version:     1,
+				BaseURL:     okMockServer.URL,
+				Concurrency: 0,
+				Timeout:     1 * time.Second,
+				Requests: []RequestSpec{
+					{
+						Name:   "first",
+						URL:    "",
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  1,
+						Expect: 200,
+					},
+				},
+			},
+			wantErrContains: "invalid concurrency",
+		},
+		{
+			name: "timeout equals 0",
+			cfg: FileConfig{
+				Version:     1,
+				BaseURL:     okMockServer.URL,
+				Concurrency: 1,
+				Timeout:     0,
+				Requests: []RequestSpec{
+					{
+						Name:   "first",
+						URL:    "",
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  1,
+						Expect: 200,
+					},
+				},
+			},
+			wantErrContains: "invalid timeout",
+		},
+		{
+			name: "requests: empty name",
+			cfg: FileConfig{
+				Version:     1,
+				BaseURL:     okMockServer.URL,
+				Concurrency: 1,
+				Timeout:     1 * time.Second,
+				Requests: []RequestSpec{
+					{
+						Name:   "",
+						URL:    "",
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  1,
+						Expect: 200,
+					},
+				},
+			},
+			wantErrContains: "empty name",
+		},
+		{
+			name: "requests: empty baseURL and subURL",
+			cfg: FileConfig{
+				Version:     1,
+				BaseURL:     "",
+				Concurrency: 1,
+				Timeout:     1 * time.Second,
+				Requests: []RequestSpec{
+					{
+						Name:   "first",
+						URL:    "",
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  1,
+						Expect: 200,
+					},
+				},
+			},
+			wantErrContains: "empty baseURL and empty URL",
+		},
+		{
+			name: "requests: count equals 0",
+			cfg: FileConfig{
+				Version:     1,
+				BaseURL:     okMockServer.URL,
+				Concurrency: 1,
+				Timeout:     1 * time.Second,
+				Requests: []RequestSpec{
+					{
+						Name:   "first",
+						URL:    "",
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  0,
+						Expect: 200,
+					},
+				},
+			},
+			wantErrContains: "invalid count",
+		},
+		{
+			name: "requests: exepct equals 0",
+			cfg: FileConfig{
+				Version:     1,
+				BaseURL:     okMockServer.URL,
+				Concurrency: 1,
+				Timeout:     1 * time.Second,
+				Requests: []RequestSpec{
+					{
+						Name:   "first",
+						URL:    "",
+						Method: http.MethodGet,
+						Header: http.Header{},
+						Body:   "",
+						Count:  1,
+						Expect: 0,
+					},
+				},
+			},
+			wantErrContains: "invalid expect",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := FileRun(t.Context(), tc.cfg)
+			if err == nil {
+				t.Fatalf("expected error for test %s, got response -> %+v", tc.name, got)
+			}
+			if !errors.Is(err, ErrInvalidConfig) {
+				t.Errorf("error = %v, want ErrInvalidConfig", err)
+			}
+			if !strings.Contains(err.Error(), tc.wantErrContains) {
+				t.Errorf("error = %q, want it to contain %q", err.Error(), tc.wantErrContains)
+			}
+		})
+	}
+}
+
+func TestCombineURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		url     string
+		want    string
+	}{
+		{name: "base ends with slash, path starts with slash", baseURL: "http://host", url: "/users", want: "http://host/users"},
+		{name: "neither has a slash", baseURL: "http://host", url: "users", want: "http://host/users"},
+		{name: "both have a slash", baseURL: "http://host/", url: "/users", want: "http://host/users"},
+		{name: "only base has a slash", baseURL: "http://host/", url: "users", want: "http://host/users"},
+		{name: "base carries a path", baseURL: "http://host/api", url: "/users", want: "http://host/api/users"},
+		{name: "base carries a path and a slash", baseURL: "http://host/api/", url: "users", want: "http://host/api/users"},
+		{name: "base with a port and no slash", baseURL: "http://host:8080", url: "users", want: "http://host:8080/users"},
+		{name: "query string is left intact", baseURL: "http://host", url: "/search?q=foo&n=1", want: "http://host/search?q=foo&n=1"},
+		{name: "fragment is left intact", baseURL: "http://host", url: "/docs#top", want: "http://host/docs#top"},
+		{name: "encoded characters are not re-encoded", baseURL: "http://host", url: "/a%20b?q=a%2Bb", want: "http://host/a%20b?q=a%2Bb"},
+		{name: "empty base returns the url", baseURL: "", url: "http://host/users", want: "http://host/users"},
+		{name: "empty base and rooted url", baseURL: "", url: "/users", want: "/users"},
+		{name: "empty url returns the base", baseURL: "http://host/users", url: "", want: "http://host/users"},
+		{name: "empty url keeps the base trailing slash", baseURL: "http://host/", url: "", want: "http://host/"},
+		{name: "both empty", baseURL: "", url: "", want: ""},
+		{name: "base is a bare slash", baseURL: "/", url: "users", want: "/users"},
+		{name: "url is a bare slash", baseURL: "http://host", url: "/", want: "http://host/"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := combineURL(tc.baseURL, tc.url); got != tc.want {
+				t.Errorf("combineURL(%q, %q) = %q, want %q", tc.baseURL, tc.url, got, tc.want)
 			}
 		})
 	}

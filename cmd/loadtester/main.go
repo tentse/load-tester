@@ -9,17 +9,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/tentse/load-tester/loadtest"
 )
-
-type errorCount struct {
-	message string
-	count   int
-}
 
 func parseHeader(s string) (name, value string, err error) {
 	name, value, ok := strings.Cut(s, ":")
@@ -49,6 +43,9 @@ func parseConfig(args []string, stderr io.Writer) (loadtest.Config, error) {
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "loadtester: a small HTTP load tester\n")
 		fmt.Fprintf(fs.Output(), "WARNING: this tool generates load. Only point it at systems you own or have explicit permission to test.\n")
+		fmt.Fprintf(fs.Output(), "\nUsage:\n")
+		fmt.Fprintf(fs.Output(), "  loadtester -url https://example.internal/ -expect 200\n")
+		fmt.Fprintf(fs.Output(), "  loadtester -f requests.json     # several endpoints from a JSON file\n\n")
 		fs.PrintDefaults()
 	}
 	targetURL := fs.String("url", "", "target URL (required)")
@@ -95,78 +92,14 @@ func parseConfig(args []string, stderr io.Writer) (loadtest.Config, error) {
 	}, nil
 }
 
-func render(w io.Writer, summary loadtest.Summary) error {
-	summaryText := getSummaryText(summary)
-	_, err := io.WriteString(w, summaryText)
-	if err != nil {
-		return fmt.Errorf("write summary: %w", err)
-	}
-	return nil
-}
-
-func getSummaryText(summary loadtest.Summary) string {
-	var b strings.Builder
-
-	fmt.Fprintf(&b,
-		"Load test summary\n"+
-			"Total: %d\n"+
-			"Succeeded: %d\n"+
-			"Failed: %d\n"+
-			"Elapsed: %v\n"+
-			"Throughput: %.2f req/s\n",
-		summary.Total,
-		summary.Succeeded,
-		summary.Failed,
-		summary.Elapsed,
-		summary.Throughput,
-	)
-
-	if summary.Succeeded == 0 {
-		b.WriteString("P50: n/a\nP90: n/a\nP99: n/a\n")
-	} else {
-		fmt.Fprintf(&b,
-			"P50: <= %v\n"+
-				"P90: <= %v\n"+
-				"P99: <= %v\n",
-			summary.P50,
-			summary.P90,
-			summary.P99,
-		)
-	}
-
-	b.WriteString(renderHistogram(summary.Buckets))
-
-	errors := make([]errorCount, 0, len(summary.Errors))
-
-	for message, count := range summary.Errors {
-		errors = append(errors, errorCount{
-			message: message,
-			count:   count,
-		})
-	}
-
-	b.WriteString("Errors:\n")
-
-	if len(errors) == 0 {
-		b.WriteString("n/a\n")
-		return b.String()
-	}
-
-	sort.Slice(errors, func(i, j int) bool {
-		if errors[i].count == errors[j].count {
-			return errors[i].message < errors[j].message
-		}
-		return errors[i].count > errors[j].count
-	})
-
-	for _, entry := range errors {
-		fmt.Fprintf(&b, "  %s: %d\n", entry.message, entry.count)
-	}
-
-	return b.String()
-}
-
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	if hasFileFlag(args) {
+		return runFile(ctx, args, stdout, stderr)
+	}
+	return runSingle(ctx, args, stdout, stderr)
+}
+
+func runSingle(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	config, err := parseConfig(args, stderr)
 	if errors.Is(err, flag.ErrHelp) {
 		return 0

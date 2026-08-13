@@ -6,11 +6,12 @@
 
 A small HTTP load tester written in Go. Point it at a URL, tell it how many requests to send
 and how many to run at once, and it tells you how the target held up — throughput, latency
-percentiles, the full latency distribution, and a breakdown of whatever went wrong.
+percentiles, the full latency distribution, and a breakdown of whatever went wrong. Point it at
+a JSON file instead and it runs several endpoints in one pass, reporting each one separately.
 
-It's a library as well as a command. The public API (`Config`, `Run`, `Summary`, `Bucket`)
-lives in an importable `loadtest` package, so you can drive load tests from your own Go code
-instead of shelling out to a binary.
+It's a library as well as a command. The public API (`Config`, `Run`, `FileConfig`,
+`RequestSpec`, `FileRun`, `Summary`, `Bucket`) lives in an importable `loadtest` package, so you
+can drive load tests from your own Go code instead of shelling out to a binary.
 
 The production code uses **nothing but the Go standard library**. That's a deliberate
 constraint, not an accident — the whole point was to learn Go's concurrency model properly
@@ -21,6 +22,32 @@ design and reviewing the code rather than writing it.
 > **⚠️ This tool generates real traffic.** Only point it at systems you own or have explicit
 > permission to test. Load testing someone else's server without permission is rude at best
 > and illegal at worst — keep it to localhost and your own staging environments.
+
+## Contents
+
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Flags](#flags)
+  - [Several endpoints from a file](#several-endpoints-from-a-file)
+  - [Expected status](#expected-status)
+  - [Headers](#headers)
+  - [Write endpoints: POST, PUT, PATCH, DELETE](#write-endpoints-post-put-patch-delete)
+- [Seeding](#seeding)
+  - [What the seed script has to do](#what-the-seed-script-has-to-do)
+  - [Spreading load across seeded rows](#spreading-load-across-seeded-rows)
+  - [Seeding for DELETE](#seeding-for-delete)
+  - [Credentials in a config file](#credentials-in-a-config-file)
+- [Understanding the output](#understanding-the-output)
+  - [How latencies are aggregated](#how-latencies-are-aggregated)
+- [Exit codes](#exit-codes)
+- [Use as a library](#use-as-a-library)
+- [Known limitations](#known-limitations)
+- [Development](#development)
+  - [Build](#build)
+  - [Tests](#tests)
+  - [Coverage](#coverage)
+  - [Before opening a PR](#before-opening-a-pr)
+- [License](#license)
 
 ## Install
 
@@ -40,8 +67,35 @@ Requires Go 1.26 or newer.
 
 ## Quick start
 
+There are two ways to run a test. Point it at a single URL:
+
 ```sh
 loadtester -url http://localhost:8080/ -c 20 -n 500 -expect 200
+```
+
+Or describe several endpoints in a JSON file and get a separate summary for each, all sharing one
+worker pool:
+
+```sh
+loadtester -f requests.json
+```
+
+The two cannot be combined — the file carries its own settings, so passing any single-target flag
+alongside `-f` exits `2`. See [Several endpoints from a file](#several-endpoints-from-a-file) for
+the file format.
+
+Only `-url` and `-expect` are required. Here is every single-target flag at once:
+
+```sh
+loadtester -url http://localhost:8080/users \
+  -method POST \
+  -body '{"name":"test"}' \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -H "X-Request-Source: load-test" \
+  -expect 201 \
+  -c 20 \
+  -n 500 \
+  -timeout 5s
 ```
 
 `-expect` is required: you tell the tool which status code counts as a success, and everything
@@ -52,21 +106,21 @@ Load test summary
 Total: 500
 Succeeded: 500
 Failed: 0
-Elapsed: 249.2195ms
-Throughput: 2006.26 req/s
-P50: <= 5ms
+Elapsed: 134.895209ms
+Throughput: 3706.58 req/s
+P50: <= 10ms
 P90: <= 10ms
-P99: <= 200ms
+P99: <= 10ms
   bucket       count
   <1ms             0
-  1–2ms           40   █████▏
-  2–5ms          260   ██████████████████████████████████
-  5–10ms         155   ████████████████████▎
-  10–20ms         30   ███▉
-  20–50ms          6   ▊
-  50–100ms         3   ▍
-  100–200ms        5   ▋
-  200–500ms        1   ▏
+  1–2ms            0
+  2–5ms          239   ███████████████████████████████▎
+  5–10ms         259   ██████████████████████████████████
+  10–20ms          2   ▎
+  20–50ms          0
+  50–100ms         0
+  100–200ms        0
+  200–500ms        0
   500ms–1s         0
   1–2s             0
   2–5s             0
@@ -81,8 +135,12 @@ you still get a summary of everything that completed.
 
 ## Flags
 
+There are two modes. Pass `-f` to run several endpoints from a JSON file, or use the flags below
+to test a single URL.
+
 | Flag | Default | Meaning |
 |---|---|---|
+| `-f` | *(none)* | JSON file describing several endpoints. Cannot be combined with any flag below |
 | `-url` | *(required)* | Target URL |
 | `-expect` | *(required)* | HTTP status code that counts as a success. Any other status is a failure |
 | `-c` | `10` | Number of concurrent workers |
@@ -92,6 +150,10 @@ you still get a summary of everything that completed.
 | `-H` | *(none)* | Custom request header as `"Name: Value"`. Repeatable — pass it once per header |
 | `-body` | *(empty)* | Request body. Sets `Content-Type: application/json` unless you set that header yourself |
 
+`-url` and `-expect` are required only when you are not using `-f`; the file carries its own
+equivalents. Every flag accepts either spelling of its value, so `-f requests.json` and
+`-f=requests.json` do the same thing.
+
 ```sh
 loadtester -url https://api.example.internal/users \
   -method POST \
@@ -100,6 +162,107 @@ loadtester -url https://api.example.internal/users \
   -expect 201 \
   -c 50 -n 1000 -timeout 5s
 ```
+
+### Several endpoints from a file
+
+```sh
+loadtester -f requests.json
+```
+
+```json
+{
+  "version": 1,
+  "baseUrl": "https://api.example.internal",
+  "concurrency": 50,
+  "timeout": "5s",
+  "requests": [
+    { "name": "search", "url": "/search?q=foo", "count": 40, "expectStatus": 200 },
+    { "name": "create-user", "method": "POST", "url": "/users",
+      "body": { "name": "test" },
+      "headers": { "Content-Type": "application/json" },
+      "count": 10, "expectStatus": 201 }
+  ]
+}
+```
+
+You get one summary per `name`:
+
+```
+Name: create-user
+Total: 10
+Succeeded: 10
+Failed: 0
+Elapsed: 11.180792ms
+Throughput: 894.39 req/s
+P50: <= 1ms
+P90: <= 1ms
+P99: <= 1ms
+  bucket       count
+  <1ms            10   ██████████████████████████████████
+  ...
+Errors:
+n/a
+
+Name: search
+Total: 40
+Succeeded: 40
+Failed: 0
+Elapsed: 11.180792ms
+Throughput: 3577.56 req/s
+P50: <= 5ms
+P90: <= 5ms
+P99: <= 5ms
+  bucket       count
+  2–5ms           40   ██████████████████████████████████
+  ...
+Errors:
+n/a
+```
+
+Every request sharing a `name` is reported as one summary, so the same endpoint can appear more
+than once with different bodies and still be measured as a single thing. `concurrency` is the
+total number of workers, shared across all endpoints rather than given to each, so adding an
+endpoint spreads the same pool wider instead of adding load.
+
+`method` defaults to `GET` and `count` to `1`. `name` and `expectStatus` are required on every
+entry — `name` because it is the label your results are grouped and reported under, and a
+generated one would leave you matching summaries back to entries by hand. `url` is required only
+when `baseUrl` is not set; with a complete `baseUrl` an entry can leave `url` out and hit the base
+itself.
+
+An optional `$schema` key is accepted and ignored, so a config can point at a JSON schema for
+editor completion without the parser complaining. Every other unknown field is rejected.
+
+`baseUrl` and each `url` are joined with exactly one slash between them, so neither side has to
+be careful about its own slashes. All four of these produce `https://api.example.internal/users`:
+
+| `baseUrl` | `url` |
+|---|---|
+| `https://api.example.internal` | `/users` |
+| `https://api.example.internal` | `users` |
+| `https://api.example.internal/` | `/users` |
+| `https://api.example.internal/` | `users` |
+
+Leave `baseUrl` out entirely and each `url` has to be a complete URL of its own.
+
+Reading the config from standard input is not supported yet: `-f -` is recognised and rejected
+with a message saying so, rather than being read as a filename.
+
+Passing any single-target flag alongside `-f` exits `2`. The file already carries those settings,
+and two sources for one rule is exactly what the format avoids.
+
+The format's design and its trade-offs are written up in
+[docs/MULTI_ENDPOINT_DESIGN.md](docs/MULTI_ENDPOINT_DESIGN.md), kept as a record of the reasoning
+rather than as current documentation.
+
+> **Two things about this output are known and being changed.** `Elapsed` and `Throughput` are
+> repeated identically under every name because they describe the whole run, not that endpoint —
+> a name's `Throughput` is only its share of the overall rate, so it is `Total` rescaled by a
+> constant and tells you nothing `Total` does not. And endpoints are issued **in order**, each
+> one's `count` in full before the next begins, rather than mixed together — so an endpoint's
+> percentiles are measured while it has the pool to itself, not while it competes with its
+> neighbours. Until that changes, read the per-endpoint numbers as "this endpoint, run alone" and
+> ignore the repeated rate. See [Known limitations](#known-limitations).
 
 ### Expected status
 
@@ -149,6 +312,138 @@ before a single request is sent, and the run exits `2`.
 
 Keep credentials out of your shell history: prefer a variable you clear afterwards, since
 anything on the command line is visible to `ps` while the run is in progress.
+
+### Write endpoints: POST, PUT, PATCH, DELETE
+
+The tool sends the **identical request** every time. It never reads a response body, captures an
+ID, or varies a value between requests, so request 500 is byte-for-byte request 1. That decides
+both what you set `count` (or `-n`) to and what you have to create beforehand.
+
+One question settles it: **if this same request arrives 500 times, does the 500th do the same
+work as the first?**
+
+| Endpoint | Same work every time? | Count to use |
+|---|---|---|
+| `GET` anything | Yes | Whatever you like |
+| `POST` that appends — a comment, an event, an order | Yes, a new row each time | Whatever you like; this is the write path worth loading hardest |
+| `POST` that creates something unique — a user with a taken email | **No.** The first succeeds, the rest hit the constraint | `1`, or use an endpoint that generates its own ID server-side |
+| `PUT` | Yes — idempotent by definition, same body means same final state | Whatever you like, but the row has to exist first |
+| `PATCH` | Usually, unless it is relative like `{"increment": 1}` | Whatever you like if absolute; `1` if relative |
+| `DELETE` | **No.** The first removes the row, the rest are `404` | `1` per row — see below |
+
+The failure this prevents is a confusing one. Point `-expect 201` at a create-user endpoint with
+`-n 500` and you get:
+
+```
+Total: 500
+Succeeded: 1
+Failed: 499
+Errors:
+  conflict: 499
+```
+
+Nothing is broken. The target enforced its unique constraint correctly and the tool reported it
+correctly — you just measured the *rejection* path 499 times, which is almost never the question
+you were asking.
+
+`PUT`, `PATCH` and `DELETE` all need rows that already exist. Creating them is a separate step —
+see [Seeding](#seeding).
+
+## Seeding
+
+`PUT`, `PATCH` and `DELETE` only mean anything against rows that already exist, and `GET /users/1`
+is not worth measuring if user 1 was never created. This tool does not create them for you.
+
+That is a deliberate line rather than a missing feature. To seed its own data the tool would have
+to read response bodies, pull an ID out of one, and substitute it into the next request — response
+parsing, templating and request chaining, all so it could avoid asking you to run one script
+first. It stays a stateless load generator instead, and seeding stays yours.
+
+### What the seed script has to do
+
+These are the constraints this tool puts on your fixtures. None of them are visible in an API
+schema, and breaking any of them shows up as a load test result rather than as an error, so they
+are worth reading before you write the script rather than after:
+
+1. **Choose the IDs yourself; do not let the server choose them.** The tool cannot read an ID out
+   of a create response and feed it into the next request. Every ID the script creates has to be
+   written into the config by hand, so they must be fixed and predictable — `1 2 3`, or
+   `loadtest-0001` — not whatever the database happens to hand back.
+2. **Fail loudly.** Check the HTTP status of every seed call and exit non-zero on anything
+   unexpected. A seed that quietly `401`s produces a load test full of `404`s, which reads exactly
+   like a broken target. This is the most common way a seeded run gives a confidently wrong answer.
+3. **Verify before handing over.** After creating, read the rows back and confirm they are there.
+   It is two lines and it catches write-succeeded-but-read-fails.
+4. **Be idempotent.** Running it twice must leave the same state as running it once — a `PUT` with
+   the full body, or an upsert, never a plain `POST` that appends.
+5. **Ship a teardown with it**, written at the same time. It must be safe to run after a partial
+   seed and safe to run twice, so a `404` during teardown is a success and not an error.
+6. **Tear down in reverse order** of creation, so foreign keys are not violated on the way out.
+7. **Namespace the data.** Prefix names with something like `loadtest-` so a human can tell your
+   rows from real ones and the teardown knows what to remove.
+8. **Match production's shape.** A seeded user with an empty profile answers faster than a real one
+   with years of history behind it. Thin fixtures give optimistic latency and you find out at the
+   worst possible time.
+9. **Seed serially, and small first.** The seed is setup, not part of the test — do not hammer the
+   target with it. Run it for one row and look at the result before you create ten thousand.
+10. **Use the same credentials the run will use**, so you are not proving an auth path the load
+    test never takes.
+11. **Only ever point it at a database you own.**
+
+### Spreading load across seeded rows
+
+Each entry sends to one URL, so one entry can only ever exercise one row. Entries sharing a `name`
+are merged into a single summary, which is exactly what you want here — three entries, three
+seeded IDs, one set of numbers:
+
+```
+Name: get-user
+Total: 300
+Succeeded: 300
+Failed: 0
+```
+
+The server sees 100 requests each on `/users/1`, `/users/2` and `/users/3`, and you read one
+`get-user` summary instead of three you have to add up by hand.
+
+### Seeding for DELETE
+
+Deleting is the case that needs seeding most, because a row can only be deleted once: the first
+request succeeds and every repeat is a `404`. Seed the rows, then give each one its own entry with
+`count: 1`, all under the same name:
+
+```json
+{ "name": "delete-user", "method": "DELETE", "url": "/users/1", "count": 1, "expectStatus": 204 },
+{ "name": "delete-user", "method": "DELETE", "url": "/users/2", "count": 1, "expectStatus": 204 },
+{ "name": "delete-user", "method": "DELETE", "url": "/users/3", "count": 1, "expectStatus": 204 }
+```
+
+```
+Name: delete-user
+Total: 3
+Succeeded: 3
+Failed: 0
+```
+
+One entry per row you seeded, so the load you can put on a delete path is capped by how many rows
+you were willing to create — this is the one path the tool cannot hammer. If all you want is how
+fast the *rejection* path is, that needs no seeding at all: aim at an ID that does not exist and
+set `expectStatus` to `404`.
+
+### Credentials in a config file
+
+There is no `${ENV}` substitution yet. The file is read literally, so this:
+
+```json
+"headers": { "Authorization": "Bearer ${API_TOKEN}" }
+```
+
+sends the header value `Bearer ${API_TOKEN}` — those characters, not your token. The target sees
+the placeholder and rejects it, and nothing in the output tells you why.
+
+Until substitution lands, a token in a config file is a plaintext secret in a file. Keep those
+files out of version control, or have the seed script generate the config from a template at run
+time, since it already holds the credentials.
 
 ## Understanding the output
 
@@ -239,7 +534,7 @@ width of the bucket it lands in.
 |---|---|
 | `0` | The run completed and a summary was printed (`-h` also exits `0`) |
 | `1` | The run failed for a reason other than configuration |
-| `2` | Invalid usage — a bad flag, a missing `-url` or `-expect`, or an invalid configuration |
+| `2` | Invalid usage — a bad flag, a missing `-url` or `-expect`, a config file that will not load, or an invalid configuration |
 | `130` | Interrupted with `Ctrl+C`; a partial summary was printed |
 
 A run whose requests all *failed* still exits `0` — the load test itself succeeded, and the
@@ -247,103 +542,58 @@ result is in the summary. Check `Failed` rather than the exit code to judge targ
 
 ## Use as a library
 
+The `loadtest` package is importable, so you can drive runs from Go instead of shelling out:
+
 ```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-	"net/http"
-	"time"
-
-	"github.com/tentse/load-tester/loadtest"
-)
-
-func main() {
-	summary, err := loadtest.Run(context.Background(), loadtest.Config{
-		URL:         "http://localhost:8080/",
-		Method:      "GET",
-		Concurrency: 10,
-		Requests:    100,
-		Timeout:     time.Second,
-		Expect:      http.StatusOK,
-		Headers: http.Header{
-			"X-API-Key": {"secret"},
-		},
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Printf("%d/%d succeeded, p99 %v\n", summary.Succeeded, summary.Total, summary.P99)
-
-	for _, bucket := range summary.Buckets {
-		if bucket.Count > 0 {
-			fmt.Printf("%-10s %d\n", bucket.Label(), bucket.Count)
-		}
-	}
-}
+summary, err := loadtest.Run(context.Background(), loadtest.Config{
+	URL:         "http://localhost:8080/",
+	Method:      http.MethodGet,
+	Concurrency: 10,
+	Requests:    100,
+	Timeout:     time.Second,
+	Expect:      http.StatusOK,
+})
 ```
 
-`Expect` is required here exactly as `-expect` is on the command line — a `Config` that leaves
-it at zero fails validation rather than defaulting to anything.
+`FileRun` is the multi-endpoint equivalent: give it a `FileConfig` and it returns one `Summary`
+per `RequestSpec.Name`. `configfile.Load` builds that `FileConfig` from a JSON file, if you want
+the same format the command reads.
 
-`Summary.Buckets` gives you the same latency breakdown the command prints, but as data instead
-of text. There is one [`Bucket`](https://pkg.go.dev/github.com/tentse/load-tester/loadtest#Bucket)
-per step of the ladder, from fastest to slowest. `Lo` and `Hi` are the start and end of the
-range, and `Count` is how many successful requests landed in it. `Lo` is part of the range and
-`Hi` is not, and the last bucket has no upper limit, so it reports an `Hi` of zero.
-`Bucket.Label` gives you the name the command prints, so the 500ms to 1s bucket reads
-`500ms–1s`. The counts add up to `Succeeded`, not `Total`. Drawing the bars is left to the
-command.
-
-`Run` honors context cancellation: cancel the context and it stops scheduling work, waits for
-in-flight requests, and returns the partial `Summary` along with `ctx.Err()`. A `Config` that
-fails validation returns a zero `Summary` and an error wrapping `loadtest.ErrInvalidConfig`,
-before any request is sent.
-
-Full API documentation:
+Every field, the `Summary` and `Bucket` shapes, and the cancellation behaviour are documented on
+the package page:
 [pkg.go.dev/github.com/tentse/load-tester/loadtest](https://pkg.go.dev/github.com/tentse/load-tester/loadtest)
 
 ## Known limitations
 
-Honest about what the tool does not do yet. Each of these is planned work, not a mystery.
+Things that will change what you conclude about your target, so worth knowing before you read a
+summary.
 
-- **Configuration errors are reported as target failures.** A malformed URL (`-url nope`) or
-  an unusable method is caught by Go's HTTP client, not by validation — so no request ever
-  leaves your machine, yet the summary blames the target with `request failed` and the tool
-  still exits `0`. Check the summary, not just `$?`, and suspect your own flags first when
-  every request fails identically.
-- **Percentiles are bucketed, not exact.** Latencies are counted into a fixed ladder of
-  buckets — `<1ms`, `1–2ms`, `2–5ms`, `5–10ms`, and so on up to `≥10s` — so a reported
-  percentile is the upper bound of its bucket and can overstate the true latency by up to
-  about 2.5×. Precision is also capped by `-n`: percentiles resolve only in steps of `1/n`,
-  so a p99 from a 100-request run rests on a single observation. The printed ladder at least
-  shows you how rough the number is: you can see how many requests sit in the bucket a
-  percentile landed in, and how wide that bucket is.
+- **A configuration mistake is reported as a target failure.** A malformed URL like `-url nope`
+  is caught by Go's HTTP client rather than by validation, so every request fails with
+  `request failed`, the summary blames the target, and the run still exits `0`. Suspect your own
+  flags first when everything fails identically.
+- **In a file run, `Elapsed` and `Throughput` describe the run, not the endpoint.** Every name
+  reports the same `Elapsed`, so a name's `Throughput` is only its `Total` rescaled. Compare
+  endpoints by their percentiles and bucket ladders instead.
+- **In a file run, endpoints go in sequence rather than mixed.** Each entry's `count` is sent in
+  full before the next begins, so endpoints never contend with one another and each one's
+  percentiles are measured with the whole worker pool to itself.
+- **Percentiles are bucketed, not exact.** A percentile is the upper bound of its bucket, so it
+  can overstate the true latency by up to about 2.5×, and precision is capped by `-n`. The
+  printed ladder shows you how rough the number is.
+- **The target can receive more requests than you asked for.** Go's HTTP client retries
+  idempotent requests that die on a reused connection, and redirects are followed automatically —
+  `-n 500` against a URL that redirects once puts 1,000 requests on the server, and you only ever
+  see the status at the end of the chain.
+- **A repeated key or flag silently takes the last value.** `-n 10 -n 5000` sends 5,000 requests,
+  and `"count": 2, "count": 9999` in one entry sends 9,999 — a careless paste can multiply your
+  load with no warning.
+- **`-expect` takes one exact code, not a range or a list.** There is no way to accept "any 2xx",
+  and the value is only checked for being positive, so `-expect 99999` is accepted and fails
+  every request.
 - **Secrets on the command line are visible** in your shell history and to anyone who can run
-  `ps` while the test is running. This covers a credential passed via `-H`, and equally a key
-  embedded in `-url`. Prefer a shell variable that you clear afterwards.
-- **Workers are not capped at `-n`.** Passing `-c 500000 -n 5` creates far more goroutines
-  than there is work for. Harmless, but wasteful.
-- **Single target only.** One URL, one method, one body per run.
-- **`-expect` takes one exact code, not a range or a list.** There is no way to accept "any
-  2xx" or "200 or 204" in a single run, so an endpoint that legitimately answers with more than
-  one status has to be tested one code at a time. The value is also only checked for being
-  positive — `-expect 99999` is accepted and simply fails every request.
-- **No redirect control.** Redirects are followed automatically, so a `301` never shows up in
-  your results — you get the status at the end of the chain, and the latency covers every hop.
-  This means `-expect 301` can never match against a URL that actually redirects. It also means
-  `-n` undercounts the load your server receives: against a URL that redirects once, `-n 500`
-  puts **1000** requests on the target.
+  `ps` during the run, whether passed via `-H` or embedded in `-url`.
 - **No fixed-duration runs.** You say how many requests to send, not how long to run for.
-
-## Roadmap
-
-The next major feature is multi-endpoint runs driven by a JSON file — several requests in one
-run, grouped into separate summaries, sharing one bounded worker pool. The design and its
-trade-offs are written up in [docs/MULTI_ENDPOINT_DESIGN.md](docs/MULTI_ENDPOINT_DESIGN.md).
 
 ## Development
 
@@ -395,25 +645,8 @@ go tool cover -html=coverage.out            # annotated view in your browser
 The `-html` view is the one worth reaching for — it colours covered lines green and uncovered
 lines red, which is how you catch a branch you only *thought* you'd tested.
 
-Current state: **`loadtest` is at 100%**, `cmd/loadtester` at 91.5%, **96.5% overall**. All the
-real logic lives in `loadtest`, and it's meant to stay at 100%.
-
-### Formatting and static analysis
-
-| Command | What it does |
-|---|---|
-| `gofmt -l .` | Lists files that aren't correctly formatted — silence means everything is fine. |
-| `gofmt -w .` | Rewrites those files in place, fixing the formatting for you. |
-| `go vet ./...` | Reports suspicious code that still compiles: bad `Printf` verbs, unused results, copied locks. |
-| `golangci-lint run` | Runs a bundle of third-party linters in one pass; the only tool here that isn't part of Go. |
-
-`gofmt` and `go vet` both ship with Go, and both are currently clean.
-
-`golangci-lint` is optional and installed separately (`brew install golangci-lint`, or see the
-[install docs](https://golangci-lint.run/welcome/install/)). It currently reports **4 `errcheck`
-findings**, all of them unchecked `fmt.Fprintf` writes to the CLI's own output stream in
-`cmd/loadtester/main.go`. They're known and on the list to fix — don't let them block your PR,
-but do keep your own changes clean.
+Current state: `loadtest` **98.2%**, `configfile` **94.0%**, `cmd/loadtester` **94.9%**, for
+**96.2% overall**. CI fails the build below 85%.
 
 ### Before opening a PR
 
