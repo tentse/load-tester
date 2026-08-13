@@ -46,6 +46,14 @@ type request struct {
 	Expect  *int              `json:"expectStatus"`
 }
 
+// Load reads name from fsys and returns a validated [loadtest.FileConfig].
+//
+// An fs.FS name cannot be absolute or contain "..", so split a user-supplied path first: the
+// loadtester command passes os.DirFS of the directory, and the base name.
+//
+// Unknown fields are rejected; "$schema" and anything after the closing brace are ignored. Load
+// stops at the first problem, and every error wraps [loadtest.ErrInvalidConfig] and names its
+// position, as requests[2].expectStatus.
 func Load(fsys fs.FS, name string) (loadtest.FileConfig, error) {
 	data, err := fs.ReadFile(fsys, name)
 	if err != nil {

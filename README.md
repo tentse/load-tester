@@ -224,9 +224,14 @@ than once with different bodies and still be measured as a single thing. `concur
 total number of workers, shared across all endpoints rather than given to each, so adding an
 endpoint spreads the same pool wider instead of adding load.
 
-`method` defaults to `GET` and `count` to `1`. `name`, `url` and `expectStatus` are required on
-every entry — `name` because it is the label your results are grouped and reported under, and a
-generated one would leave you matching summaries back to entries by hand.
+`method` defaults to `GET` and `count` to `1`. `name` and `expectStatus` are required on every
+entry — `name` because it is the label your results are grouped and reported under, and a
+generated one would leave you matching summaries back to entries by hand. `url` is required only
+when `baseUrl` is not set; with a complete `baseUrl` an entry can leave `url` out and hit the base
+itself.
+
+An optional `$schema` key is accepted and ignored, so a config can point at a JSON schema for
+editor completion without the parser complaining. Every other unknown field is rejected.
 
 `baseUrl` and each `url` are joined with exactly one slash between them, so neither side has to
 be careful about its own slashes. All four of these produce `https://api.example.internal/users`:
@@ -239,6 +244,9 @@ be careful about its own slashes. All four of these produce `https://api.example
 | `https://api.example.internal/` | `users` |
 
 Leave `baseUrl` out entirely and each `url` has to be a complete URL of its own.
+
+Reading the config from standard input is not supported yet: `-f -` is recognised and rejected
+with a message saying so, rather than being read as a filename.
 
 Passing any single-target flag alongside `-f` exits `2`. The file already carries those settings,
 and two sources for one rule is exactly what the format avoids.
@@ -637,8 +645,8 @@ go tool cover -html=coverage.out            # annotated view in your browser
 The `-html` view is the one worth reaching for — it colours covered lines green and uncovered
 lines red, which is how you catch a branch you only *thought* you'd tested.
 
-Current state: **`loadtest` is at 100%**, `cmd/loadtester` at 91.5%, **96.5% overall**. All the
-real logic lives in `loadtest`, and it's meant to stay at 100%.
+Current state: `loadtest` **98.2%**, `configfile` **94.0%**, `cmd/loadtester` **94.9%**, for
+**96.2% overall**. CI fails the build below 85%.
 
 ### Before opening a PR
 
