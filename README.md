@@ -565,42 +565,34 @@ the package page:
 
 ## Known limitations
 
-Honest about what the tool does not do yet. Each of these is planned work, not a mystery.
+Things that will change what you conclude about your target, so worth knowing before you read a
+summary.
 
-- **`Elapsed` and `Throughput` in a file run describe the run, not the endpoint.** Every name
-  reports the same `Elapsed`, so a name's `Throughput` is only its `Total` rescaled — compare
+- **A configuration mistake is reported as a target failure.** A malformed URL like `-url nope`
+  is caught by Go's HTTP client rather than by validation, so every request fails with
+  `request failed`, the summary blames the target, and the run still exits `0`. Suspect your own
+  flags first when everything fails identically.
+- **In a file run, `Elapsed` and `Throughput` describe the run, not the endpoint.** Every name
+  reports the same `Elapsed`, so a name's `Throughput` is only its `Total` rescaled. Compare
   endpoints by their percentiles and bucket ladders instead.
-- **A repeated flag silently takes the last value.** `-n 10 -n 5000` sends 5,000 requests, and
-  `-f missing.json -f ok.json` runs `ok.json` and exits `0` without ever opening the first file.
-- **Endpoints in a file run in sequence, not mixed.** Each entry's `count` is sent in full before
-  the next begins, so endpoints never contend with each other and their percentiles are measured
-  with the worker pool to themselves.
-- **Configuration errors are reported as target failures.** A malformed URL like `-url nope` is
-  caught by Go's HTTP client rather than by validation, so the summary blames the target with
-  `request failed` and the run still exits `0`.
-- **A repeated JSON key is accepted and the last one wins.** `"count": 2, "count": 9999` parses
-  cleanly and sends 9,999 requests — unknown fields are rejected, but duplicated known ones are
-  not.
-- **Anything after the closing brace of the config is ignored.** A truncated or double-pasted
-  file can load as though it were perfectly fine.
+- **In a file run, endpoints go in sequence rather than mixed.** Each entry's `count` is sent in
+  full before the next begins, so endpoints never contend with one another and each one's
+  percentiles are measured with the whole worker pool to itself.
+- **Percentiles are bucketed, not exact.** A percentile is the upper bound of its bucket, so it
+  can overstate the true latency by up to about 2.5×, and precision is capped by `-n`. The
+  printed ladder shows you how rough the number is.
 - **The target can receive more requests than you asked for.** Go's HTTP client retries
-  idempotent requests that die on a reused connection, and every redirect adds a hop — `-n 500`
-  against a URL that redirects once puts 1,000 requests on the server.
-- **A wrong-status failure is named after the status that arrived.** Under `-expect 500` a
-  healthy server prints `Errors: ok: 40` beneath `Failed: 40`; the count is right, the wording
-  is not.
-- **Percentiles are bucketed, not exact.** A percentile is reported as the upper bound of its
-  bucket, so it can overstate the true latency by up to about 2.5×, and precision is capped by
-  `-n`. The printed ladder shows you how rough the number is.
+  idempotent requests that die on a reused connection, and redirects are followed automatically —
+  `-n 500` against a URL that redirects once puts 1,000 requests on the server, and you only ever
+  see the status at the end of the chain.
+- **A repeated key or flag silently takes the last value.** `-n 10 -n 5000` sends 5,000 requests,
+  and `"count": 2, "count": 9999` in one entry sends 9,999 — a careless paste can multiply your
+  load with no warning.
 - **`-expect` takes one exact code, not a range or a list.** There is no way to accept "any 2xx",
   and the value is only checked for being positive, so `-expect 99999` is accepted and fails
   every request.
-- **No redirect control.** Redirects are followed automatically, so you only see the status at
-  the end of the chain and `-expect 301` can never match a URL that actually redirects.
 - **Secrets on the command line are visible** in your shell history and to anyone who can run
   `ps` during the run, whether passed via `-H` or embedded in `-url`.
-- **Workers are not capped at `-n`.** Passing `-c 500000 -n 5` creates far more goroutines than
-  there is work for. Wasteful, not harmful.
 - **No fixed-duration runs.** You say how many requests to send, not how long to run for.
 
 ## Development
