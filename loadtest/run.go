@@ -206,7 +206,7 @@ func Run(ctx context.Context, config Config) (Summary, error) {
 	jobs := make(chan struct{})
 	lh := latencyHistogram{}
 
-	r := newRunner(config.Timeout)
+	r := newRunner(config.Timeout, config.Concurrency)
 	defer r.client.CloseIdleConnections()
 
 	elapsedStart := time.Now()
@@ -399,7 +399,7 @@ func FileRun(ctx context.Context, cfg FileConfig) (map[string]Summary, error) {
 		}
 	}()
 
-	r := newRunner(cfg.Timeout)
+	r := newRunner(cfg.Timeout, cfg.Concurrency)
 	defer r.client.CloseIdleConnections()
 
 	var wg sync.WaitGroup
