@@ -34,8 +34,11 @@ func TestHasFileFlag(t *testing.T) {
 		{name: "after other flags", args: []string{"-c", "5", "-f", "requests.json"}, want: true},
 		{name: "not a prefix match", args: []string{"-force", "x"}, want: false},
 		{name: "another flag's value looks like it", args: []string{"-method", "-f"}, want: true},
-		{name: "equals form is not file mode", args: []string{"-f=requests.json"}, want: false},
-		{name: "double dash equals form is not file mode", args: []string{"--f=requests.json"}, want: false},
+		{name: "equals form", args: []string{"-f=requests.json"}, want: true},
+		{name: "double dash equals form", args: []string{"--f=requests.json"}, want: true},
+		{name: "equals form after other flags", args: []string{"-c", "5", "-f=requests.json"}, want: true},
+		{name: "another flag's equals value is not a prefix match", args: []string{"-force=requests.json"}, want: false},
+		{name: "equals value containing the name", args: []string{"-body={\"f\":1}"}, want: false},
 	}
 
 	for _, tc := range tests {

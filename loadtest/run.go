@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -351,6 +352,17 @@ func validateFileConfig(cfg FileConfig) error {
 	return nil
 }
 
+func combineURL(baseURL, url string) string {
+	if baseURL == "" {
+		return url
+	}
+	if url == "" {
+		return baseURL
+	}
+
+	return strings.TrimSuffix(baseURL, "/") + "/" + strings.TrimPrefix(url, "/")
+}
+
 // FileRun executes a load test across several endpoints and reports one Summary per
 // RequestSpec.Name.
 //
@@ -388,7 +400,7 @@ func FileRun(ctx context.Context, cfg FileConfig) (map[string]Summary, error) {
 	go func() {
 		defer close(jobs)
 		for _, request := range cfg.Requests {
-			request.URL = cfg.BaseURL + request.URL // test case pending
+			request.URL = combineURL(cfg.BaseURL, request.URL)
 			for i := 1; i <= request.Count; i++ {
 				select {
 				case <-ctx.Done():

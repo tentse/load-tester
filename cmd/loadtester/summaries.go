@@ -18,11 +18,6 @@ func renderSummaries(w io.Writer, summaries map[string]loadtest.Summary) error {
 	return nil
 }
 
-// getSummariesText reports one block per endpoint, in name order.
-//
-// The order is sorted rather than map order so two runs of the same test produce the same output.
-// An empty map produces an empty string, leaving it to the caller to decide whether a run that
-// measured nothing is worth reporting.
 func getSummariesText(summaries map[string]loadtest.Summary) string {
 	var b strings.Builder
 

@@ -1152,3 +1152,38 @@ func TestInvalidFileConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestCombineURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		url     string
+		want    string
+	}{
+		{name: "base ends with slash, path starts with slash", baseURL: "http://host", url: "/users", want: "http://host/users"},
+		{name: "neither has a slash", baseURL: "http://host", url: "users", want: "http://host/users"},
+		{name: "both have a slash", baseURL: "http://host/", url: "/users", want: "http://host/users"},
+		{name: "only base has a slash", baseURL: "http://host/", url: "users", want: "http://host/users"},
+		{name: "base carries a path", baseURL: "http://host/api", url: "/users", want: "http://host/api/users"},
+		{name: "base carries a path and a slash", baseURL: "http://host/api/", url: "users", want: "http://host/api/users"},
+		{name: "base with a port and no slash", baseURL: "http://host:8080", url: "users", want: "http://host:8080/users"},
+		{name: "query string is left intact", baseURL: "http://host", url: "/search?q=foo&n=1", want: "http://host/search?q=foo&n=1"},
+		{name: "fragment is left intact", baseURL: "http://host", url: "/docs#top", want: "http://host/docs#top"},
+		{name: "encoded characters are not re-encoded", baseURL: "http://host", url: "/a%20b?q=a%2Bb", want: "http://host/a%20b?q=a%2Bb"},
+		{name: "empty base returns the url", baseURL: "", url: "http://host/users", want: "http://host/users"},
+		{name: "empty base and rooted url", baseURL: "", url: "/users", want: "/users"},
+		{name: "empty url returns the base", baseURL: "http://host/users", url: "", want: "http://host/users"},
+		{name: "empty url keeps the base trailing slash", baseURL: "http://host/", url: "", want: "http://host/"},
+		{name: "both empty", baseURL: "", url: "", want: ""},
+		{name: "base is a bare slash", baseURL: "/", url: "users", want: "/users"},
+		{name: "url is a bare slash", baseURL: "http://host", url: "/", want: "http://host/"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := combineURL(tc.baseURL, tc.url); got != tc.want {
+				t.Errorf("combineURL(%q, %q) = %q, want %q", tc.baseURL, tc.url, got, tc.want)
+			}
+		})
+	}
+}
