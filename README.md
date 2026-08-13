@@ -33,10 +33,11 @@ design and reviewing the code rather than writing it.
   - [Headers](#headers)
   - [Write endpoints: POST, PUT, PATCH, DELETE](#write-endpoints-post-put-patch-delete)
 - [Seeding](#seeding)
-  - [Rules for a seed script](#rules-for-a-seed-script)
+  - [What the seed script has to do](#what-the-seed-script-has-to-do)
   - [A worked example](#a-worked-example)
   - [Spreading load across seeded rows](#spreading-load-across-seeded-rows)
   - [Seeding for DELETE](#seeding-for-delete)
+  - [Credentials in a config file](#credentials-in-a-config-file)
 - [Understanding the output](#understanding-the-output)
   - [How latencies are aggregated](#how-latencies-are-aggregated)
 - [Exit codes](#exit-codes)
@@ -351,38 +352,85 @@ to read response bodies, pull an ID out of one, and substitute it into the next 
 parsing, templating and request chaining, all so it could avoid asking you to run one script
 first. It stays a stateless load generator instead, and seeding stays yours.
 
-### Rules for a seed script
+### What the seed script has to do
 
-- **Fixed, known IDs.** The tool cannot capture an ID out of a create response, so the seed script
-  decides the IDs and the config names them. `PUT /users/1` works because you already know there
-  is a user 1.
-- **Idempotent.** Re-running the seed must not pile up duplicates — upsert, or delete first.
-- **A teardown written at the same time.** Load tests leave rows behind. Write the cleanup when you
-  write the seed, not when you discover you need it.
-- **Small first.** Run it for one row and look at the result before you create ten thousand.
-- **Only a database you own.** The same rule as the load test itself.
-- **Realistic shape.** A seeded user with an empty profile answers faster than a real one with
-  years of history behind it. If your fixtures are thinner than production, your latency numbers
-  are optimistic and you find out at the worst possible time.
+These are the constraints this tool puts on your fixtures. None of them are visible in an API
+schema, and breaking any of them shows up as a load test result rather than as an error, so they
+are worth reading before you write the script rather than after:
+
+1. **Choose the IDs yourself; do not let the server choose them.** The tool cannot read an ID out
+   of a create response and feed it into the next request. Every ID the script creates has to be
+   written into the config by hand, so they must be fixed and predictable — `1 2 3`, or
+   `loadtest-0001` — not whatever the database happens to hand back.
+2. **Fail loudly.** Check the HTTP status of every seed call and exit non-zero on anything
+   unexpected. A seed that quietly `401`s produces a load test full of `404`s, which reads exactly
+   like a broken target. This is the most common way a seeded run gives a confidently wrong answer.
+3. **Verify before handing over.** After creating, read the rows back and confirm they are there.
+   It is two lines and it catches write-succeeded-but-read-fails.
+4. **Be idempotent.** Running it twice must leave the same state as running it once — a `PUT` with
+   the full body, or an upsert, never a plain `POST` that appends.
+5. **Ship a teardown with it**, written at the same time. It must be safe to run after a partial
+   seed and safe to run twice, so a `404` during teardown is a success and not an error.
+6. **Tear down in reverse order** of creation, so foreign keys are not violated on the way out.
+7. **Namespace the data.** Prefix names with something like `loadtest-` so a human can tell your
+   rows from real ones and the teardown knows what to remove.
+8. **Match production's shape.** A seeded user with an empty profile answers faster than a real one
+   with years of history behind it. Thin fixtures give optimistic latency and you find out at the
+   worst possible time.
+9. **Seed serially, and small first.** The seed is setup, not part of the test — do not hammer the
+   target with it. Run it for one row and look at the result before you create ten thousand.
+10. **Use the same credentials the run will use**, so you are not proving an auth path the load
+    test never takes.
+11. **Only ever point it at a database you own.**
 
 ### A worked example
 
-Seed three rows with IDs you picked:
+The seed picks the IDs, checks every status, and proves the rows are readable before the run
+starts:
 
 ```sh
 #!/bin/sh
 # seed.sh
 set -eu
-BASE=http://localhost:8080
+BASE=${BASE:-http://localhost:8080}
+TOKEN=${API_TOKEN:?set API_TOKEN first}
+IDS="1 2 3"
 
-for id in 1 2 3; do
-  curl -sS -X PUT "$BASE/users/$id" \
-    -H 'Content-Type: application/json' \
-    -d "{\"id\":$id,\"name\":\"loadtest-user-$id\"}" -o /dev/null
+for id in $IDS; do
+  code=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$BASE/users/$id" \
+    -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    -d "{\"id\":$id,\"name\":\"loadtest-user-$id\"}")
+  case "$code" in
+    200|201|204) ;;
+    *) echo "seed: PUT /users/$id returned $code" >&2; exit 1 ;;
+  esac
+done
+
+for id in $IDS; do
+  code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$BASE/users/$id")
+  [ "$code" = 200 ] || { echo "seed: GET /users/$id returned $code" >&2; exit 1; }
+done
+
+echo "seeded: $IDS"
+```
+
+The teardown uses `set -u` rather than `set -eu` and swallows failures, so one missing row does
+not stop it removing the rest:
+
+```sh
+#!/bin/sh
+# teardown.sh
+set -u
+BASE=${BASE:-http://localhost:8080}
+TOKEN=${API_TOKEN:?set API_TOKEN first}
+
+for id in 3 2 1; do
+  curl -sS -o /dev/null -X DELETE "$BASE/users/$id" -H "Authorization: Bearer $TOKEN" || true
 done
 ```
 
-Point the config at exactly those IDs:
+The config names exactly the IDs the seed created. This is the contract between the two files —
+if they disagree, the run measures `404`s:
 
 ```json
 {
@@ -398,8 +446,8 @@ Point the config at exactly those IDs:
 }
 ```
 
-Then run the three steps in order. Use `;` before the teardown, not `&&`, so cleanup still happens
-when the load test fails:
+Run the three steps in order. Use `;` before the teardown, not `&&`, so cleanup still happens when
+the load test fails:
 
 ```sh
 ./seed.sh && loadtester -f requests.json; ./teardown.sh
@@ -444,6 +492,21 @@ One entry per row you seeded, so the load you can put on a delete path is capped
 you were willing to create — this is the one path the tool cannot hammer. If all you want is how
 fast the *rejection* path is, that needs no seeding at all: aim at an ID that does not exist and
 set `expectStatus` to `404`.
+
+### Credentials in a config file
+
+There is no `${ENV}` substitution yet. The file is read literally, so this:
+
+```json
+"headers": { "Authorization": "Bearer ${API_TOKEN}" }
+```
+
+sends the header value `Bearer ${API_TOKEN}` — those characters, not your token. The target sees
+the placeholder and rejects it, and nothing in the output tells you why.
+
+Until substitution lands, a token in a config file is a plaintext secret in a file. Keep those
+files out of version control, or have the seed script generate the config from a template at run
+time, since it already holds the credentials.
 
 ## Understanding the output
 
