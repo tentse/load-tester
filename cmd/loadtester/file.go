@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/tentse/load-tester/configfile"
 	"github.com/tentse/load-tester/loadtest"
@@ -19,7 +20,8 @@ const stdinPath = "-"
 
 func hasFileFlag(args []string) bool {
 	for _, arg := range args {
-		if arg == "-f" || arg == "--f" {
+		name, _, _ := strings.Cut(arg, "=")
+		if name == "-f" || name == "--f" {
 			return true
 		}
 	}
