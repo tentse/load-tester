@@ -121,10 +121,12 @@ func runSingle(ctx context.Context, args []string, stdout, stderr io.Writer) int
 			return 130
 		}
 		if errors.Is(err, loadtest.ErrInvalidConfig) {
-			fmt.Fprintf(stderr, "loadtest.Run() error: \n%v\n", err)
+			fmt.Fprintf(stderr, "%v
+", err)
 			return 2
 		} else {
-			fmt.Fprintf(stderr, "loadtest.Run() error: \n%v\n", err)
+			fmt.Fprintf(stderr, "%v
+", err)
 			return 1
 		}
 	}
